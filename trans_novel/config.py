@@ -19,9 +19,27 @@ language:
 
 # ── LLM ──────────────────────────────────────────────────────────────────
 llm:
-  provider: deepseek # deepseek | fake（fake 用于离线测试，不发网络请求）
-  # DeepSeek 的 base_url、DEEPSEEK_API_KEY 和默认模型档位由 provider 内置。
-  # 需要代理、自定义模型或超时时，再按 docs/configuration.md 添加覆盖项。
+  # deepseek | openai | openrouter | openai-compatible | ollama | vllm | fake
+  provider: deepseek
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  timeout: 600
+  max_retries: 4
+  tiers:
+    strong:
+      model: deepseek-v4-pro
+      options:
+        thinking: true
+        reasoning_effort: high
+    cheap:
+      model: deepseek-v4-flash
+      options:
+        thinking: true
+        reasoning_effort: high
+    fast:
+      model: deepseek-v4-flash
+      options:
+        thinking: false
 
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:

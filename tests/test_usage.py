@@ -13,14 +13,18 @@ from unittest.mock import patch
 from trans_novel.agents.base import Agent
 from trans_novel.config import Config, LLMConfig, TierConfig
 from trans_novel.llm.factory import build_client
+from trans_novel.llm.providers._openai_compatible import normalize_openai_usage
 from trans_novel.llm.providers.deepseek import (
     DEFAULT_API_KEY_ENV,
     DEFAULT_BASE_URL,
     DeepSeekClient,
 )
 from trans_novel.llm.providers.fake import FakeClient
+from trans_novel.llm.providers.openai import OpenAIClient
 from trans_novel.llm.usage import (
+    UsageSample,
     UsageTracker,
+    make_usage_sample,
     merge_usage_summaries,
     usage_delta,
 )
@@ -209,6 +213,62 @@ class TestDeepSeekUsageByTier(unittest.TestCase):
         self.assertEqual(summary["by_stage"]["Translator"]["cache_hit_rate"], 0.8)
 
 
+class TestOpenAIUsageNormalization(unittest.TestCase):
+    def test_nested_cached_tokens_are_normalized(self):
+        cfg = LLMConfig(
+            provider="openai",
+            base_url="x",
+            api_key_env="X",
+            timeout=1,
+            max_retries=0,
+            tiers={"strong": TierConfig(model="m")},
+        )
+        client = OpenAIClient(cfg)
+        usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=40),
+        )
+        response = _make_response("ok", usage)
+
+        with patch.object(
+            client,
+            "_ensure_client",
+            return_value=_ClientStub([response]),
+        ):
+            self.assertEqual(
+                client.complete(
+                    [{"role": "user", "content": "x"}],
+                    stage="Translator",
+                ),
+                "ok",
+            )
+
+        summary = client.usage_summary()
+        self.assertEqual(summary["totals"]["cache_hit_tokens"], 40)
+        self.assertEqual(summary["totals"]["cache_miss_tokens"], 60)
+        self.assertEqual(summary["totals"]["cache_hit_rate"], 0.4)
+        self.assertEqual(
+            summary["by_stage"]["Translator"]["cache_hit_rate"],
+            0.4,
+        )
+
+    def test_missing_cache_details_remain_unknown(self):
+        sample = normalize_openai_usage(
+            SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=20,
+                total_tokens=120,
+            )
+        )
+        tracker = UsageTracker()
+        tracker.record("strong", sample)
+        totals = tracker.summary()["totals"]
+        self.assertEqual(totals["cache_hit_tokens"], 0)
+        self.assertEqual(totals["cache_miss_tokens"], 0)
+
+
 class TestMissingUsage(unittest.TestCase):
     def test_none_usage_silently_skipped(self):
         tracker = UsageTracker()
@@ -252,7 +312,7 @@ class TestMissingUsage(unittest.TestCase):
         usage = _make_usage(prompt_tokens=40, completion_tokens=10)
         # 确认未设置 total_tokens
         self.assertFalse(hasattr(usage, "total_tokens"))
-        tracker.record("cheap", usage)
+        tracker.record("cheap", make_usage_sample(usage))
         slot = tracker.summary()["by_tier"]["cheap"]
         self.assertEqual(slot["prompt_tokens"], 40)
         self.assertEqual(slot["completion_tokens"], 10)
@@ -290,12 +350,12 @@ class TestUsageThreadSafety(unittest.TestCase):
         client = FakeClient()
         n_workers = 8
         per_worker = 25  # 8 * 25 = 200
-        usage = _make_usage(
+        usage = UsageSample(
             prompt_tokens=10,
             completion_tokens=5,
             total_tokens=15,
-            prompt_cache_hit_tokens=3,
-            prompt_cache_miss_tokens=7,
+            cache_hit_tokens=3,
+            cache_miss_tokens=7,
         )
 
         def _worker() -> None:
@@ -343,12 +403,12 @@ class TestUsageIncrementalPersistence(unittest.TestCase):
     ) -> None:
         client.usage.record(
             tier,
-            _make_usage(
+            UsageSample(
                 prompt_tokens=prompt,
                 completion_tokens=completion,
                 total_tokens=prompt + completion,
-                prompt_cache_hit_tokens=prompt // 2,
-                prompt_cache_miss_tokens=prompt - prompt // 2,
+                cache_hit_tokens=prompt // 2,
+                cache_miss_tokens=prompt - prompt // 2,
             ),
             stage,
         )

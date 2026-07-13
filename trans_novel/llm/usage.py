@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 _USAGE_FIELDS = (
@@ -15,15 +16,57 @@ _USAGE_FIELDS = (
 )
 
 
-def _usage_int(usage: Any, name: str) -> int:
-    """从响应 usage 对象/字典读取整数字段，缺失或非数返回 0。"""
+@dataclass(frozen=True)
+class UsageSample:
+    """provider 原始 usage 标准化后的单次调用用量。"""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+
+
+def read_usage_value(usage: Any, name: str) -> Any:
+    """从 SDK 对象或字典读取字段，保留缺失与 0 的区别。"""
+    if usage is None:
+        return None
     value = getattr(usage, name, None)
     if value is None and isinstance(usage, dict):
-        value = usage.get(name)
+        return usage.get(name)
+    return value
+
+
+def read_usage_int(usage: Any, name: str) -> int:
+    """从响应 usage 对象/字典读取整数字段，缺失或非数返回 0。"""
+    value = read_usage_value(usage, name)
     try:
         return int(value) if value is not None else 0
     except (TypeError, ValueError):
         return 0
+
+
+def make_usage_sample(
+    usage: Any,
+    *,
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
+) -> UsageSample | None:
+    """读取各 API 共用的 token 字段，组装 provider 无关的用量记录。"""
+    if usage is None:
+        return None
+    prompt_tokens = read_usage_int(usage, "prompt_tokens")
+    completion_tokens = read_usage_int(usage, "completion_tokens")
+    total_tokens = read_usage_int(usage, "total_tokens") or (
+        prompt_tokens + completion_tokens
+    )
+    return UsageSample(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cache_hit_tokens=max(0, cache_hit_tokens),
+        cache_miss_tokens=max(0, cache_miss_tokens),
+    )
 
 
 def _hit_rate(hit: int, miss: int) -> float:
@@ -36,7 +79,7 @@ def _normalize_usage_group(
 ) -> dict[str, dict[str, Any]]:
     """规范化一组用量槽位，并重新计算各槽位缓存命中率。"""
     normalized: dict[str, dict[str, Any]] = {
-        name: {field: _usage_int(values, field) for field in _USAGE_FIELDS}
+        name: {field: read_usage_int(values, field) for field in _USAGE_FIELDS}
         for name, values in group.items()
     }
     for slot in normalized.values():
@@ -70,7 +113,10 @@ def _usage_group_delta(
     for name, values in current.items():
         old = previous.get(name) or {}
         slot = {
-            field: max(0, _usage_int(values, field) - _usage_int(old, field))
+            field: max(
+                0,
+                read_usage_int(values, field) - read_usage_int(old, field),
+            )
             for field in _USAGE_FIELDS
         }
         if any(slot.values()):
@@ -86,7 +132,7 @@ def _merge_usage_groups(
         for name, values in group.items():
             slot = merged.setdefault(name, dict.fromkeys(_USAGE_FIELDS, 0))
             for field in _USAGE_FIELDS:
-                slot[field] += _usage_int(values, field)
+                slot[field] += read_usage_int(values, field)
     return merged
 
 
@@ -107,28 +153,22 @@ def merge_usage_summaries(
 
 
 class UsageTracker:
-    """线程安全的 token 用量累加器，按 tier 和调用 stage 分别归因。
-
-    DeepSeek 的 usage 里 prompt_cache_hit_tokens + prompt_cache_miss_tokens == prompt_tokens；
-    缓存命中率 = cache_hit /(cache_hit + cache_miss)。fake provider 不产生 usage，保持空。
-    """
+    """线程安全地累加标准化用量，按 tier 和调用 stage 分别归因。"""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_tier: dict[str, dict[str, int]] = {}
         self._by_stage: dict[str, dict[str, int]] = {}
 
-    def record(self, tier: str, usage: Any, stage: str | None = None) -> None:
-        """累加一次响应的 usage；usage 缺失时静默跳过（不影响正常返回）。"""
-        if usage is None:
+    def record(
+        self,
+        tier: str,
+        sample: UsageSample | None,
+        stage: str | None = None,
+    ) -> None:
+        """累加 provider 标准化后的用量；缺失时静默跳过。"""
+        if sample is None:
             return
-        prompt_tokens = _usage_int(usage, "prompt_tokens")
-        completion_tokens = _usage_int(usage, "completion_tokens")
-        total_tokens = _usage_int(usage, "total_tokens") or (
-            prompt_tokens + completion_tokens
-        )
-        cache_hit_tokens = _usage_int(usage, "prompt_cache_hit_tokens")
-        cache_miss_tokens = _usage_int(usage, "prompt_cache_miss_tokens")
         with self._lock:
             slots = [
                 self._by_tier.setdefault(tier, dict.fromkeys(_USAGE_FIELDS, 0))
@@ -139,11 +179,11 @@ class UsageTracker:
                 )
             for slot in slots:
                 slot["calls"] += 1
-                slot["prompt_tokens"] += prompt_tokens
-                slot["completion_tokens"] += completion_tokens
-                slot["total_tokens"] += total_tokens
-                slot["cache_hit_tokens"] += cache_hit_tokens
-                slot["cache_miss_tokens"] += cache_miss_tokens
+                slot["prompt_tokens"] += sample.prompt_tokens
+                slot["completion_tokens"] += sample.completion_tokens
+                slot["total_tokens"] += sample.total_tokens
+                slot["cache_hit_tokens"] += sample.cache_hit_tokens
+                slot["cache_miss_tokens"] += sample.cache_miss_tokens
 
     def summary(self) -> dict[str, Any]:
         """返回 totals、by_tier 和 by_stage，各槽位含 cache_hit_rate。"""
