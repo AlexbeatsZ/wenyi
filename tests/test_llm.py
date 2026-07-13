@@ -93,6 +93,21 @@ class TestParseJsonLooseRepairs(unittest.TestCase):
 class TestProviderRequestKwargs(unittest.TestCase):
     messages = [{"role": "user", "content": "x"}]
 
+    def test_json_mode_adds_lowercase_keyword_without_mutating_messages(self):
+        from trans_novel.llm.providers._openai_compatible import (
+            base_request_kwargs,
+        )
+
+        messages = [
+            {"role": "system", "content": "仅输出指定对象。"},
+            {"role": "user", "content": "x"},
+        ]
+        kwargs = base_request_kwargs("m", messages, json_mode=True)
+
+        self.assertEqual(kwargs["response_format"], {"type": "json_object"})
+        self.assertIn("json", kwargs["messages"][0]["content"])
+        self.assertEqual(messages[0]["content"], "仅输出指定对象。")
+
     def test_deepseek_dialect_and_recursive_extra_body(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.deepseek import (
