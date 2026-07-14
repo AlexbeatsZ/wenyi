@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 import typer
 from rich.console import Console
@@ -96,6 +96,10 @@ tools_app = typer.Typer(
 console = Console()
 
 
+class _ManifestStore(Protocol):
+    def load_manifest(self) -> dict[str, Any]: ...
+
+
 @app.callback()
 def _root(
     config: str = typer.Option("config.yaml", "--config", "-c", help="配置文件路径"),
@@ -128,7 +132,7 @@ def _runstore_for(config: Config, input_path: str) -> RunStore:
     return RunStore(run_dir, create=False)
 
 
-def _apply_store_languages(config: Config, store: RunStore) -> None:
+def _apply_store_languages(config: Config, store: _ManifestStore) -> None:
     """独立工具命令从运行 manifest 恢复实际语言。"""
     manifest = store.load_manifest()
     source_lang = manifest.get("source_lang")

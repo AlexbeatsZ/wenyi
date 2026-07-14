@@ -245,13 +245,22 @@ class TestAssembleEpub(unittest.TestCase):
         paragraphs = rendered.find_all("p")
 
         self.assertEqual(paragraphs[0].get_text(), "你好世界")
-        self.assertTrue(paragraphs[0].find("em").get_text())
+        emphasis = paragraphs[0].find("em")
+        self.assertIsInstance(emphasis, Tag)
+        assert isinstance(emphasis, Tag)
+        self.assertTrue(emphasis.get_text())
         link = paragraphs[0].find("a")
+        self.assertIsInstance(link, Tag)
+        assert isinstance(link, Tag)
         self.assertEqual(link.get("href"), "note.xhtml")
         self.assertTrue(link.get_text())
         ruby = paragraphs[1].find("ruby")
-        self.assertIsNotNone(ruby)
-        self.assertEqual(ruby.find("rt").get_text(), "かんじ")
+        self.assertIsInstance(ruby, Tag)
+        assert isinstance(ruby, Tag)
+        reading = ruby.find("rt")
+        self.assertIsInstance(reading, Tag)
+        assert isinstance(reading, Tag)
+        self.assertEqual(reading.get_text(), "かんじ")
         self.assertIn("汉字如此", paragraphs[1].get_text().replace("かんじ", ""))
 
     def test_rewrite_html_honors_declared_encoding_and_emits_utf8(self):
@@ -297,7 +306,7 @@ class TestAssembleEpub(unittest.TestCase):
         assert isinstance(image, Tag)
         self.assertEqual(image.get("src"), "image.jpg")
         self.assertEqual(image_data, b"inline-image")
-        self.assertIsNone(rendered.find(attrs={"data-tn-inline-id": True}))
+        self.assertIsNone(rendered.select_one("[data-tn-inline-id]"))
 
     def test_epub_render_restores_inline_images_and_breaks(self):
         html = """<html><body>
@@ -331,12 +340,12 @@ class TestAssembleEpub(unittest.TestCase):
         self.assertIsNotNone(paragraph.find("br"))
         self.assertEqual(
             [
-                child.name if getattr(child, "name", None) else str(child)
+                child.name if isinstance(child, Tag) else str(child)
                 for child in paragraph.children
             ],
             ["img", "甲乙", "br", "丙丁", "img"],
         )
-        self.assertIsNone(rendered.find(attrs={"data-tn-inline-id": True}))
+        self.assertIsNone(rendered.select_one("[data-tn-inline-id]"))
         standalone = rendered.find("p", class_="illustration")
         self.assertIsInstance(standalone, Tag)
         assert isinstance(standalone, Tag)

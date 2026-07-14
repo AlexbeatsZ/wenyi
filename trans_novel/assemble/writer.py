@@ -12,8 +12,8 @@ import os
 import re
 import zipfile
 
-from bs4 import BeautifulSoup, Comment, NavigableString, UnicodeDammit
-from bs4.element import Tag
+from bs4 import BeautifulSoup, UnicodeDammit
+from bs4.element import Comment, NavigableString, Tag
 
 from ..ingest.fb2_reader import read_fb2_binaries
 from ..ingest.models import KIND_HEADING, Chapter

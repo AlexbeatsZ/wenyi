@@ -41,8 +41,14 @@ class TestAnalyzer(unittest.TestCase):
             store = GlossaryStore(os.path.join(d, "g.db"))
             n = a.seed_glossary(store, result)
             self.assertEqual(n, 2)
-            self.assertEqual(store.get_term("綾小路").gender, "男")
-            self.assertEqual(store.get_term("高度育成高校").type, "组织")
+            character = store.get_term("綾小路")
+            organization = store.get_term("高度育成高校")
+            self.assertIsNotNone(character)
+            self.assertIsNotNone(organization)
+            assert character is not None
+            assert organization is not None
+            self.assertEqual(character.gender, "男")
+            self.assertEqual(organization.type, "组织")
             store.close()
 
         brief = a.style_brief(result)
@@ -66,7 +72,10 @@ class TestAnalyzer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             store = GlossaryStore(os.path.join(d, "g.db"))
             self.assertEqual(analyzer.seed_glossary(store, result), 2)
-            self.assertEqual(store.get_term("学校").type, "术语")
+            school = store.get_term("学校")
+            self.assertIsNotNone(school)
+            assert school is not None
+            self.assertEqual(school.type, "术语")
             store.close()
 
 
@@ -84,11 +93,16 @@ class TestExtractor(unittest.TestCase):
             summary = ext.extract_and_store(store, "原文", "译文", chapter=1)
             self.assertEqual(summary["inserted"], 2)
             horikita = store.get_term("堀北")
+            self.assertIsNotNone(horikita)
+            assert horikita is not None
             self.assertEqual(horikita.gender, "女")
             self.assertEqual(horikita.aliases, ["堀北さん"])
             self.assertEqual(horikita.first_chapter, 1)
             # "未知" 应被规整为空
-            self.assertEqual(store.get_term("屋上").gender, "")
+            rooftop = store.get_term("屋上")
+            self.assertIsNotNone(rooftop)
+            assert rooftop is not None
+            self.assertEqual(rooftop.gender, "")
             store.close()
 
     def test_malformed_optional_fields_fall_back_safely(self):

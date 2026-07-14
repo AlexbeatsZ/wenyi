@@ -15,7 +15,8 @@ import posixpath
 import xml.etree.ElementTree as ET
 import zipfile
 
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag, UnicodeDammit
+from bs4 import BeautifulSoup, UnicodeDammit
+from bs4.element import Comment, NavigableString, Tag
 
 from .models import KIND_HEADING, KIND_TEXT, Chapter, Document, Segment
 
