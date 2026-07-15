@@ -5,11 +5,17 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 
 from trans_novel.assemble.writer import assemble
+from trans_novel.cli import _runstore_for
+from trans_novel.config import Config
+from trans_novel.ingest.errors import MinerUError
 from trans_novel.ingest.segmenter import load_document
+from trans_novel.llm.providers.fake import FakeClient
+from trans_novel.pipeline.orchestrator import Orchestrator
 from trans_novel.pipeline.runstore import RunStore
 
 
@@ -35,24 +41,113 @@ def _set_test_targets(store: RunStore) -> None:
 
 
 class TestPdfIngest(unittest.TestCase):
-    def test_pdf_reuses_companion_html_without_api_call(self):
+    def test_pdf_reuses_state_html_without_api_call(self):
         with tempfile.TemporaryDirectory() as directory:
             pdf_path = os.path.join(directory, "sample.pdf")
             with open(pdf_path, "wb") as file:
-                file.write(b"not accessed when companion HTML exists")
-            with open(pdf_path + ".html", "w", encoding="utf-8") as file:
+                file.write(b"not accessed when cached HTML exists")
+            cache_dir = os.path.join(directory, "state", "sample", "source")
+            os.makedirs(cache_dir)
+            cached_html = os.path.join(cache_dir, "converted.html")
+            with open(cached_html, "w", encoding="utf-8") as file:
                 file.write(_HTML)
 
-            document = load_document(pdf_path, "en", "zh")
+            document = load_document(
+                pdf_path,
+                "en",
+                "zh",
+                cache_dir=cache_dir,
+            )
 
         self.assertEqual(document.title, "sample")
         self.assertEqual(document.fmt, "pdf")
         self.assertEqual(document.source_path, os.path.abspath(pdf_path))
         self.assertEqual(
+            document.meta["converted_html_path"],
+            os.path.abspath(cached_html),
+        )
+        self.assertEqual(
             [chapter.title for chapter in document.chapters],
             ["Chapter One", "Chapter Two"],
         )
         self.assertTrue(all(chapter.template for chapter in document.chapters))
+
+    def test_pdf_wraps_external_conversion_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = os.path.join(directory, "sample.pdf")
+            with open(pdf_path, "wb") as file:
+                file.write(b"invalid PDF is not read because conversion is mocked")
+            cache_dir = os.path.join(directory, "state", "sample", "source")
+
+            with patch(
+                "trans_novel.ingest.pdf_to_html.convert_pdf_to_html",
+                side_effect=RuntimeError("connection reset"),
+            ):
+                with self.assertRaisesRegex(MinerUError, "PDF 转换失败") as raised:
+                    load_document(
+                        pdf_path,
+                        "en",
+                        "zh",
+                        cache_dir=cache_dir,
+                    )
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_orchestrator_uses_state_cache_and_resume_skips_pdf_parse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = os.path.join(directory, "sample.pdf")
+            with open(pdf_path, "wb") as file:
+                file.write(b"not accessed when cached HTML exists")
+            state_dir = os.path.join(directory, "state")
+            cache_dir = os.path.join(state_dir, "sample", "source")
+            os.makedirs(cache_dir)
+            cached_html = os.path.join(cache_dir, "converted.html")
+            with open(cached_html, "w", encoding="utf-8") as file:
+                file.write(_HTML)
+            config = Config.from_dict(
+                {
+                    "language": {"source": "en", "target": "zh"},
+                    "llm": {
+                        "provider": "fake",
+                        "tiers": {"strong": {"model": "fake"}},
+                    },
+                    "paths": {"state_dir": state_dir},
+                }
+            )
+            orchestrator = Orchestrator(config, client=FakeClient())
+
+            store = orchestrator.prepare(pdf_path)
+            os.remove(cached_html)
+            resumed = orchestrator.prepare(pdf_path)
+
+        self.assertEqual(store.run_dir, os.path.join(state_dir, "sample"))
+        self.assertEqual(resumed.run_dir, store.run_dir)
+        self.assertFalse(os.path.exists(cached_html))
+
+    def test_cli_tools_locate_pdf_state_without_parsing_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = os.path.join(directory, "sample.pdf")
+            with open(pdf_path, "wb") as file:
+                file.write(b"PDF parsing must not run for status tools")
+            state_dir = os.path.join(directory, "state")
+            config = Config.from_dict(
+                {
+                    "language": {"source": "en", "target": "zh"},
+                    "llm": {
+                        "provider": "fake",
+                        "tiers": {"strong": {"model": "fake"}},
+                    },
+                    "paths": {"state_dir": state_dir},
+                }
+            )
+
+            with patch(
+                "trans_novel.cli.load_document",
+                side_effect=AssertionError("PDF source should not be parsed"),
+            ):
+                store = _runstore_for(config, pdf_path)
+
+        self.assertEqual(store.run_dir, os.path.join(state_dir, "sample"))
 
 
 class TestHtmlAndMarkdownIntegration(unittest.TestCase):

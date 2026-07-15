@@ -35,7 +35,7 @@ setx DEEPSEEK_API_KEY "sk-..."
 - 输入格式：EPUB、FB2、TXT、Markdown、HTML、PDF。
 - 默认输出：源文件所在目录 `output/` 中的单语版 `<书名>.zh.epub`；双语版 `<书名>.zh-bi.epub` 需按需开启。
 - `--format txt|html|markdown`：改为导出指定格式；所有输入默认仍生成 EPUB。
-- PDF 首次读取需设置 `MINERU_API_KEY`。转换结果保存为同目录 `<文件名>.pdf.html`，后续运行会直接复用，也可人工修正后再续跑。
+- PDF 首次读取需设置 `MINERU_API_KEY`。转换结果保存为 `state/<书名>/source/converted.html`，后续运行会直接复用，也可人工修正后再续跑。
 - EPUB 输入会尽量按原 XHTML 模板回填译文，保留样式、图片、目录和锚点。
 - 双语版按段展示译文与淡化原文，排列顺序由 `output.bilingual_order` 控制。
 - EPUB 默认在书末附加“关于此翻译”说明，可通过 `output.about_page: false` 关闭。

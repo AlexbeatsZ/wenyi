@@ -25,21 +25,12 @@ from typing import Callable
 import httpx
 from pypdf import PdfReader, PdfWriter
 
+from trans_novel.ingest.errors import MinerUError, MinerUTimeoutError
+
 API_BASE = "https://mineru.net/api/v4"
 MAX_PAGES = 200
 POLL_INTERVAL = 3.0
 MAX_WAIT_PER_TASK = 600
-
-
-# ── errors ──
-
-
-class MinerUError(RuntimeError):
-    """Raised when the MinerU API returns an error."""
-
-
-class MinerUTimeoutError(MinerUError):
-    """Raised when a MinerU task times out."""
 
 
 # ── API client ──

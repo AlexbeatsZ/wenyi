@@ -24,6 +24,7 @@ from rich.progress import (
 from rich.table import Table
 
 from .config import Config
+from .ingest.errors import IngestError
 from .ingest.segmenter import load_document
 from .pipeline.runstore import STATUS_DONE, RunStore, slugify
 
@@ -78,6 +79,10 @@ def _require_input_file(input_path: str) -> None:
 
 def _runstore_for(config: Config, input_path: str) -> RunStore:
     _require_input_file(input_path)
+    if os.path.splitext(input_path)[1].lower() == ".pdf":
+        title = os.path.splitext(os.path.basename(input_path))[0]
+        run_dir = os.path.join(config.state_dir, slugify(title))
+        return RunStore(run_dir, create=False)
     doc = load_document(input_path, config.source_lang, config.target_lang)
     run_dir = os.path.join(config.state_dir, slugify(doc.title))
     return RunStore(run_dir, create=False)
@@ -95,6 +100,34 @@ def _translate_impl(
     bilingual: Optional[bool] = None,
 ) -> None:
     """translate/resume 共享实现，避免 CLI 参数转发漂移。"""
+    try:
+        _translate_impl_or_raise(
+            input_path,
+            chapter=chapter,
+            fmt=fmt,
+            out=out,
+            polish=polish,
+            qa=qa,
+            mono=mono,
+            bilingual=bilingual,
+        )
+    except (IngestError, ImportError, OSError, ValueError) as error:
+        console.print(f"[red]错误：{error}[/]")
+        raise typer.Exit(1) from None
+
+
+def _translate_impl_or_raise(
+    input_path: str,
+    *,
+    chapter: Optional[int] = None,
+    fmt: str = "epub",
+    out: Optional[str] = None,
+    polish: Optional[bool] = None,
+    qa: Optional[bool] = None,
+    mono: Optional[bool] = None,
+    bilingual: Optional[bool] = None,
+) -> None:
+    """执行翻译并保留原异常，由 ``_translate_impl`` 转为 CLI 错误。"""
     from .pipeline.orchestrator import Orchestrator
 
     _require_input_file(input_path)

@@ -16,7 +16,6 @@ import re
 from .epub_reader import read_epub
 from .fb2_reader import read_fb2
 from .html_reader import read_html
-from .md_reader import read_text as read_md
 from .models import KIND_TEXT, Chapter, Document, Segment
 from .pdf_reader import read_pdf
 from .text_reader import read_text
@@ -105,21 +104,31 @@ def split_long_segments(chapters: list[Chapter], max_chars: int) -> None:
 
 
 def load_document(
-    path: str, source_lang: str, target_lang: str, split_segments: int = 0
+    path: str,
+    source_lang: str,
+    target_lang: str,
+    split_segments: int = 0,
+    *,
+    cache_dir: str | None = None,
 ) -> Document:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".epub":
         doc = read_epub(path, source_lang, target_lang)
-    elif ext in (".md", ".markdown"):
-        doc = read_md(path, source_lang, target_lang)
-    elif ext in (".txt", ".text"):
+    elif ext in (".md", ".markdown", ".txt", ".text"):
         doc = read_text(path, source_lang, target_lang)
     elif ext == ".fb2":
         doc = read_fb2(path, source_lang, target_lang)
     elif ext in (".html", ".htm"):
         doc = read_html(path, source_lang, target_lang)
     elif ext == ".pdf":
-        doc = read_pdf(path, source_lang, target_lang)
+        if cache_dir is None:
+            raise ValueError("PDF 读取需要指定运行状态缓存目录")
+        doc = read_pdf(
+            path,
+            source_lang,
+            target_lang,
+            cache_dir=cache_dir,
+        )
     else:
         raise ValueError(
             f"不支持的格式：{ext}（支持 .epub / .txt / .md / .fb2 / .html / .pdf）"

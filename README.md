@@ -25,7 +25,7 @@ uv run trans-novel status book.epub
 
 - 输入：EPUB、FB2、TXT、Markdown、HTML、PDF。
 - 输出：默认生成单语 EPUB，可选双语对照版；也可导出 TXT、HTML 或 Markdown。
-- PDF：首次读取通过 MinerU 转换为同目录 `<文件名>.pdf.html`，需设置 `MINERU_API_KEY`；后续运行直接复用该文件。
+- PDF：首次读取通过 MinerU 转换为 `state/<书名>/source/converted.html`，需设置 `MINERU_API_KEY`；后续运行直接复用该缓存。
 - EPUB：尽量保留原书样式、图片、目录与锚点；译文元数据默认设为简体中文，并将竖排样式转为横排。
 - 语言：默认由模型识别源语言，也可在 `config.yaml` 固定为语言代码。
 
