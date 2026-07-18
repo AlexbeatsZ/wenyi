@@ -18,6 +18,7 @@ import zipfile
 from bs4 import BeautifulSoup, UnicodeDammit
 from bs4.element import Comment, NavigableString, Tag
 
+from ..locales import message
 from .models import KIND_HEADING, KIND_TEXT, Chapter, Document, Segment
 
 _CONTAINER = "META-INF/container.xml"
@@ -158,7 +159,7 @@ def _find_opf_path(zf: zipfile.ZipFile) -> str:
             path = el.attrib.get("full-path", "").strip()
             if path:
                 return path
-    raise ValueError("EPUB 损坏：container.xml 未找到有效的 rootfile full-path")
+    raise ValueError(message("error.epub_rootfile_missing"))
 
 
 def _zip_href(base_path: str, href: str) -> str:

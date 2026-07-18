@@ -9,7 +9,8 @@ import unittest
 import zipfile
 
 from trans_novel.config import Config
-from trans_novel.agents.langprofile import honorific_rule
+from trans_novel.languages import pair_guidance
+from trans_novel.locales import message as ui_message
 from trans_novel.postprocess.punct import normalize_zh, normalize_zh_segments
 from trans_novel.llm.providers.fake import FakeClient
 from trans_novel.pipeline.orchestrator import Orchestrator
@@ -34,7 +35,7 @@ class TestModelLanguageDetection(unittest.TestCase):
             cfg = self._cfg(os.path.join(d, "state"))
 
             def handler(messages, tier, json_mode):
-                if "语言识别器" in messages[0]["content"]:
+                if "Identify the main natural language" in messages[0]["content"]:
                     return json.dumps({"language": "russian"}, ensure_ascii=False)
                 return routing_handler(messages, tier, json_mode)
 
@@ -49,7 +50,7 @@ class TestModelLanguageDetection(unittest.TestCase):
             cfg = self._cfg(os.path.join(d, "state"))
 
             def handler(messages, tier, json_mode):
-                if "语言识别器" in messages[0]["content"]:
+                if "Identify the main natural language" in messages[0]["content"]:
                     return json.dumps({"language": ""}, ensure_ascii=False)
                 return routing_handler(messages, tier, json_mode)
 
@@ -94,10 +95,14 @@ class TestPunct(unittest.TestCase):
         )
 
     def test_continuation_flags_must_align_with_texts(self):
-        with self.assertRaisesRegex(ValueError, "数量必须一致"):
+        with self.assertRaises(ValueError) as raised:
             normalize_zh_segments(["第一段"], [])
+        self.assertEqual(
+            str(raised.exception),
+            ui_message("error.punctuation_segment_count_mismatch"),
+        )
 
-    def test_non_chinese_target_does_not_enable_chinese_normalization(self):
+    def test_english_target_enables_target_specific_quote_normalization(self):
         with tempfile.TemporaryDirectory() as directory:
             cfg = Config.from_dict(
                 {
@@ -108,12 +113,12 @@ class TestPunct(unittest.TestCase):
             )
             orchestrator = Orchestrator(cfg, client=FakeClient())
 
-        self.assertFalse(orchestrator._punctuation_enabled())
+        self.assertTrue(orchestrator._punctuation_enabled())
 
 
 class TestLanguageProfile(unittest.TestCase):
     def test_keep_style_requires_stable_honorific_choice(self):
-        rule = honorific_rule("keep_style")
+        rule = pair_guidance("ja", "zh", "keep_style")
 
         self.assertIn("确定后同一关系全书沿用", rule)
         self.assertNotIn("可酌情保留", rule)

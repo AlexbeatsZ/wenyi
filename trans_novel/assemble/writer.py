@@ -16,8 +16,10 @@ from html import escape
 from bs4 import BeautifulSoup, UnicodeDammit
 from bs4.element import Tag
 
+from .. import languages
 from ..ingest.fb2_reader import read_fb2_binaries
 from ..ingest.models import KIND_HEADING, Chapter
+from ..locales import message
 from ..pipeline.runstore import RunStore
 from .about import append_about_page
 
@@ -87,8 +89,13 @@ def _default_out(
     title: str | None = None,
     *,
     bilingual: bool = False,
+    target_lang: str = "zh",
 ) -> str:
-    """Return the default export path under the input file's ``output`` folder."""
+    """Return the language-qualified path under the input file's output folder.
+
+    Simplified Chinese retains the historical ``.zh``/``.zh-bi`` names.  Other
+    targets use a filesystem-safe BCP 47 tag, for example ``.en``/``.en-bi``.
+    """
     ext = _OUT_EXT.get(out_format, ".epub")
     output_dir = os.path.join(os.path.dirname(os.path.abspath(source_path)), "output")
     os.makedirs(output_dir, exist_ok=True)
@@ -96,7 +103,12 @@ def _default_out(
         # 保留给显式调用方使用；默认 assemble 不传书名译名。
         return os.path.join(output_dir, _sanitize_filename(title) + ext)
     base, _ = os.path.splitext(source_path)
-    suffix = ".zh-bi" if bilingual else ".zh"
+    target_tag = (
+        "zh"
+        if not target_lang or languages.is_simplified_chinese(target_lang)
+        else languages.filename_language_tag(target_lang)
+    )
+    suffix = f".{target_tag}-bi" if bilingual else f".{target_tag}"
     return os.path.join(
         output_dir,
         f"{os.path.basename(base)}{suffix}{ext}",
@@ -120,11 +132,14 @@ def _seg_text(seg) -> str:
 
 
 def _epub_lang(lang: str | None) -> str:
-    """EPUB 元数据语言码；中文目标默认标成简体中文。"""
-    normalized = (lang or "").strip().replace("_", "-").lower()
-    if normalized in {"", "zh", "zh-cn", "zh-hans", "cn"}:
-        return "zh-Hans"
-    return lang or "zh-Hans"
+    """Return the canonical target language used in EPUB metadata."""
+    return languages.epub_language_tag(lang)
+
+
+def _source_lang(lang: str | None) -> str:
+    """Return a usable BCP 47 tag for bilingual source blocks."""
+    canonical = languages.canonical_tag(lang)
+    return "und" if canonical in {"", "auto"} else canonical
 
 
 def _merged_paragraphs(chapter: Chapter) -> list[tuple[str, str, str]]:
@@ -268,6 +283,7 @@ def _render_chapter_html(
     bilingual: bool = False,
     order: str = "target_first",
     preserve_source_style: bool = False,
+    source_lang: str | None = None,
 ) -> str:
     """把一章译文按锚点回填 XHTML，并按需生成双语原文块。
 
@@ -320,6 +336,10 @@ def _render_chapter_html(
         else:
             source_classes.append("ibooks-dark-theme-use-custom-text-color")
         src_el["class"] = source_classes
+        if source_lang:
+            lang = _source_lang(source_lang)
+            src_el["lang"] = lang
+            src_el["xml:lang"] = lang
         src_el.append(src)
         if nested_source and order == "source_first":
             el.insert(0, src_el)
@@ -358,12 +378,21 @@ def _rewrite_opf_metadata(
                 title_el.clear()
                 title_el.append(book_title)
 
-        lang_el = soup.find("dc:language") or soup.find("language")
-        if lang_el is None:
-            metadata = soup.find("metadata")
-            if metadata is not None:
-                lang_el = soup.new_tag("dc:language")
-                metadata.append(lang_el)
+        metadata = soup.find("metadata")
+        language_elements = (
+            metadata.find_all(["dc:language", "language"])
+            if metadata is not None
+            else []
+        )
+        if language_elements:
+            lang_el = language_elements[0]
+            for duplicate in language_elements[1:]:
+                duplicate.decompose()
+        elif metadata is not None:
+            lang_el = soup.new_tag("dc:language")
+            metadata.append(lang_el)
+        else:
+            lang_el = None
         if lang_el is not None:
             lang_el.clear()
             lang_el.append(lang)
@@ -510,6 +539,7 @@ def _assemble_html(
         head_html += f'<style id="{_BILINGUAL_STYLE_ID}">\n{_BILINGUAL_CSS}</style>'
 
     body_parts: list[str] = []
+    source_lang = _source_lang(m.get("source_lang"))
     for c in m["chapters"]:
         ch = store.load_chapter(c["index"])
         if ch.template:
@@ -520,6 +550,7 @@ def _assemble_html(
                     bilingual=bilingual,
                     order=order,
                     preserve_source_style=preserve_source_style,
+                    source_lang=source_lang,
                 )
             )
             continue
@@ -540,7 +571,10 @@ def _assemble_html(
             if not src:
                 body_parts.append(target_html)
                 continue
-            source_html = f'<p class="tn-source">{escape(src)}</p>'
+            source_html = (
+                f'<p class="tn-source" lang="{escape(source_lang, quote=True)}" '
+                f'xml:lang="{escape(source_lang, quote=True)}">{escape(src)}</p>'
+            )
             if order == "source_first":
                 body_parts.extend((source_html, target_html))
             else:
@@ -573,6 +607,7 @@ def _assemble_epub(
     """复制原 EPUB 并替换正文、目录及目标语言相关元数据。"""
     m = store.load_manifest()
     target_lang = _epub_lang(m.get("target_lang", "zh"))
+    source_lang = _source_lang(m.get("source_lang"))
     # href -> 渲染后的 XHTML
     rendered: dict[str, str] = {}
     for c in m["chapters"]:
@@ -583,6 +618,7 @@ def _assemble_epub(
                 bilingual=bilingual,
                 order=order,
                 preserve_source_style=preserve_source_style,
+                source_lang=source_lang,
             )
 
     # 目录标题映射（文件名 → 译名）；书名保持原文，不改 OPF 主标题。
@@ -703,6 +739,7 @@ def _build_epub_from_chapters(
     m = store.load_manifest()
     title = m.get("title", "translated")
     lang = _epub_lang(m.get("target_lang", "zh"))
+    source_lang = _source_lang(m.get("source_lang"))
 
     book = epub.EpubBook()
     book.set_identifier(f"trans-novel-{title}")
@@ -786,7 +823,11 @@ def _build_epub_from_chapters(
                 if preserve_source_style
                 else "tn-source ibooks-dark-theme-use-custom-text-color"
             )
-            src_html = f'<p class="{source_class}">{escape(src)}</p>'
+            src_html = (
+                f'<p class="{source_class}" '
+                f'lang="{escape(source_lang, quote=True)}" '
+                f'xml:lang="{escape(source_lang, quote=True)}">{escape(src)}</p>'
+            )
             if order == "source_first":
                 body_parts.extend((src_html, target_html))
             else:
@@ -842,17 +883,27 @@ def assemble(
     about_page=True 时在书末附加“关于此翻译”说明页。
     """
     if out_format not in _OUT_EXT:
-        supported = " / ".join(_OUT_EXT)
-        raise ValueError(f"不支持的输出格式：{out_format}（支持 {supported}）")
+        raise ValueError(message("error.unsupported_format", format=out_format))
 
     m = store.load_manifest()
+    target_lang = m.get("target_lang", "zh")
     if out_format == "txt":
-        out_path = out_path or _default_out(source_path, "txt", "", bilingual=bilingual)
+        out_path = out_path or _default_out(
+            source_path,
+            "txt",
+            "",
+            bilingual=bilingual,
+            target_lang=target_lang,
+        )
         _ensure_parent_dir(out_path)
         return _assemble_text(store, out_path, bilingual=bilingual, order=order)
     if out_format == "html":
         out_path = out_path or _default_out(
-            source_path, "html", "", bilingual=bilingual
+            source_path,
+            "html",
+            "",
+            bilingual=bilingual,
+            target_lang=target_lang,
         )
         _ensure_parent_dir(out_path)
         return _assemble_html(
@@ -864,11 +915,21 @@ def assemble(
         )
     if out_format == "markdown":
         out_path = out_path or _default_out(
-            source_path, "markdown", "", bilingual=bilingual
+            source_path,
+            "markdown",
+            "",
+            bilingual=bilingual,
+            target_lang=target_lang,
         )
         _ensure_parent_dir(out_path)
         return _assemble_markdown(store, out_path, bilingual=bilingual, order=order)
-    out_path = out_path or _default_out(source_path, "epub", "", bilingual=bilingual)
+    out_path = out_path or _default_out(
+        source_path,
+        "epub",
+        "",
+        bilingual=bilingual,
+        target_lang=target_lang,
+    )
     _ensure_parent_dir(out_path)
     if m["fmt"] == "epub":
         result = _assemble_epub(

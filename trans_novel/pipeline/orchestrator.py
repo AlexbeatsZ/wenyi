@@ -22,17 +22,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from .. import languages
 from ..config import Config
 from ..glossary.extractor import GlossaryExtractor
 from ..glossary.store import GlossaryStore
 from ..llm.base import LLMClient
 from ..llm.factory import build_client
 from ..llm.usage import merge_usage_summaries, usage_delta
+from ..locales import message as ui_message
 from ..ingest.segmenter import load_document, batch_segments
-from ..postprocess.punct import normalize_zh, normalize_zh_segments
 from ..agents.analyzer import Analyzer
 from ..agents.synopsis import Synopsizer
-from ..agents.translator import Translator
+from ..assemble.translator import Translator
 from ..agents.reviewer import Reviewer, BackTranslator
 from ..agents.polisher import Polisher
 from . import checks
@@ -44,35 +45,10 @@ from .runstore import (
     REVIEW_RUNNING,
     RunStore,
     STATUS_DONE,
-    slugify,
+    run_slug,
 )
 
 ProgressFn = Callable[[int, int, str], None]
-
-
-# 语言名/代码 → ISO 639-1 两字母代码（模型检测结果归一化）
-_LANG_ALIASES = {
-    "japanese": "ja", "日语": "ja", "日文": "ja", "jp": "ja", "jpn": "ja",
-    "english": "en", "英语": "en", "英文": "en", "eng": "en",
-    "russian": "ru", "俄语": "ru", "俄文": "ru", "rus": "ru",
-    "chinese": "zh", "中文": "zh", "汉语": "zh", "zh-cn": "zh", "zho": "zh",
-    "korean": "ko", "韩语": "ko", "韩文": "ko", "kor": "ko",
-    "french": "fr", "法语": "fr", "法文": "fr",
-    "german": "de", "德语": "de", "德文": "de",
-    "spanish": "es", "西班牙语": "es", "西班牙文": "es",
-    "italian": "it", "意大利语": "it", "意大利文": "it",
-    "portuguese": "pt", "葡萄牙语": "pt", "葡萄牙文": "pt",
-}
-
-
-def _normalize_lang(code: str) -> str:
-    """把模型返回的语言名或别名规整为 ISO 639-1 两字母代码。"""
-    c = (code or "").strip().lower()
-    if not c or c in {"auto", "unknown", "und", "uncertain", "mixed", "多语言", "未知"}:
-        return ""
-    if c in _LANG_ALIASES:
-        return _LANG_ALIASES[c]
-    return c[:2] if c[:2].isalpha() else ""
 
 
 def _resume_batches(segments, max_chars: int) -> list[list]:
@@ -119,10 +95,9 @@ class Orchestrator:
         self.extractor = GlossaryExtractor(self.client, config)
 
     def _punctuation_enabled(self) -> bool:
-        """判断当前目标语言是否应启用中文标点规范化。"""
-        target = (self.config.target_lang or "").lower().replace("_", "-")
-        return self.config.punctuation_normalize and (
-            target == "zh" or target.startswith("zh-")
+        """判断当前目标语言包是否提供确定性标点规范化。"""
+        return self.config.punctuation_normalize and languages.punctuation_enabled(
+            self.config.target_lang,
         )
 
     def _flush_usage(self, store: RunStore, *, scope: str) -> dict[str, Any]:
@@ -148,13 +123,55 @@ class Orchestrator:
         return cumulative
 
     # ── 语言解析 ────────────────────────────────────────────────────────────
-    def _apply_language(self, lang: str) -> None:
-        """把解析出的源语言应用到 config 与各 agent（auto 检测后调用）。"""
-        resolved = lang or self.config.source_lang
-        self.config.source_lang = resolved
+    def _apply_languages(self, source_lang: str, target_lang: str) -> None:
+        """把已确定的语言对同步到 config 与全部流水线 agent。"""
+        source = languages.canonical_tag(source_lang or self.config.source_lang)
+        target = languages.canonical_tag(target_lang or self.config.target_lang)
+        if not source or source == "auto":
+            raise ValueError(ui_message("error.state_source_language_missing"))
+        if not target or target == "auto":
+            raise ValueError(ui_message("error.state_target_language_missing"))
+        self.config.source_lang = source
+        self.config.target_lang = target
         for ag in (self.analyzer, self.synopsizer, self.translator, self.reviewer,
                    self.backtrans, self.polisher, self.extractor):
-            ag.src = resolved
+            ag.src = source
+            ag.tgt = target
+
+    def _restore_manifest_languages(self, manifest: dict[str, Any]) -> None:
+        """校验运行状态的语言对，并恢复 config 与各 agent 的实际语言。"""
+        stored_source = manifest.get("source_lang")
+        stored_target = manifest.get("target_lang")
+        if not isinstance(stored_source, str) or not stored_source.strip():
+            raise ValueError(ui_message("error.manifest_source_missing"))
+        if not isinstance(stored_target, str) or not stored_target.strip():
+            raise ValueError(ui_message("error.manifest_target_missing"))
+
+        source = languages.canonical_tag(stored_source)
+        target = languages.canonical_tag(stored_target)
+        requested_source = languages.canonical_tag(self.config.source_lang)
+        requested_target = languages.canonical_tag(self.config.target_lang)
+        if requested_source not in {"", "auto"} and requested_source != source:
+            raise ValueError(
+                ui_message(
+                    "error.source_mismatch",
+                    configured=requested_source,
+                    stored=source,
+                )
+            )
+        if (
+            requested_target
+            and languages.target_identity(requested_target)
+            != languages.target_identity(target)
+        ):
+            raise ValueError(
+                ui_message(
+                    "error.target_mismatch",
+                    configured=requested_target,
+                    stored=target,
+                )
+            )
+        self._apply_languages(source, target)
 
     # ── 准备 / 续跑入口 ──────────────────────────────────────────────────
     def _locate_existing_store(
@@ -172,7 +189,7 @@ class Orchestrator:
             title = os.path.splitext(os.path.basename(input_path))[0]
         else:
             if progress:
-                progress(0, 0, "查找翻译进度…")
+                progress(0, 0, ui_message("progress.locating_state"))
             doc = load_document(
                 input_path,
                 self.config.source_lang,
@@ -182,11 +199,15 @@ class Orchestrator:
             title = doc.title
 
         store = RunStore(
-            os.path.join(self.config.state_dir, slugify(title)),
+            os.path.join(
+                self.config.state_dir,
+                run_slug(title, self.config.target_lang),
+            ),
             create=False,
         )
         if not store.exists():
-            raise ValueError("尚无翻译进度。请先运行 translate。")
+            raise ValueError(ui_message("error.translation_state_missing"))
+        self._restore_manifest_languages(store.load_manifest())
         return store
 
     def prepare(self, input_path: str, *,
@@ -199,10 +220,14 @@ class Orchestrator:
         if os.path.splitext(input_path)[1].lower() == ".pdf":
             # PDF 的书名固定取文件名，首次解析前即可确定状态目录。
             pdf_title = os.path.splitext(os.path.basename(input_path))[0]
-            run_dir = os.path.join(self.config.state_dir, slugify(pdf_title))
+            run_dir = os.path.join(
+                self.config.state_dir,
+                run_slug(pdf_title, self.config.target_lang),
+            )
             store = RunStore(run_dir)
             with store.lock():
                 if store.exists():
+                    self._restore_manifest_languages(store.load_manifest())
                     store.log_event(
                         "run_resumed",
                         input_path=input_path,
@@ -210,7 +235,7 @@ class Orchestrator:
                     )
                     return store
                 if progress:
-                    progress(0, 0, "解析文档…")
+                    progress(0, 0, ui_message("progress.parsing_document"))
                 doc = load_document(
                     input_path,
                     self.config.source_lang,
@@ -221,7 +246,7 @@ class Orchestrator:
                 return self._prepare_locked(doc, store, input_path, progress)
 
         if progress:
-            progress(0, 0, "解析文档…")
+            progress(0, 0, ui_message("progress.parsing_document"))
         # 超长段按句拆分（max_chars_per_segment），续段标 cont 供回填并回
         doc = load_document(
             input_path,
@@ -229,7 +254,10 @@ class Orchestrator:
             self.config.target_lang,
             split_segments=self.config.segment.max_chars_per_segment,
         )
-        run_dir = os.path.join(self.config.state_dir, slugify(doc.title))
+        run_dir = os.path.join(
+            self.config.state_dir,
+            run_slug(doc.title, self.config.target_lang),
+        )
         store = RunStore(run_dir)
         with store.lock():
             return self._prepare_locked(doc, store, input_path, progress)
@@ -243,30 +271,33 @@ class Orchestrator:
     ) -> RunStore:
         """恢复已有状态；新运行分阶段写入，并以 manifest 原子提交完成标志。"""
         if store.exists():
+            self._restore_manifest_languages(store.load_manifest())
             store.log_event("run_resumed", input_path=input_path, run_dir=store.run_dir)
-            return store  # 已有进度 → 直接续跑，不重置（语言在 run() 里按 manifest 应用）
+            return store  # 已有进度 → 直接续跑，不重置
 
         # 新建：auto 时只使用模型检测主要语言；失败则要求用户显式指定。
         if self.config.source_lang in ("auto", "", None):
             if progress:
-                progress(0, 0, "识别语言…")
+                progress(0, 0, ui_message("progress.detecting_language"))
             detected = self._detect_language_ai(doc)
             if not detected:
                 store.log_event("language_detection_failed", source_lang=doc.source_lang)
-                raise RuntimeError(
-                    "自动识别源语言失败：请检查模型配置，或在 config.yaml 的 "
-                    "language.source 指定 ISO 639-1 语言代码（如 ja/en/ko/ru/fr/de/es）。"
-                )
+                raise RuntimeError(ui_message("error.language_detection_failed"))
             doc.source_lang = detected
             store.log_event("language_detected", source_lang=doc.source_lang)
-        self._apply_language(doc.source_lang)
+        self._apply_languages(doc.source_lang, doc.target_lang)
+        doc.source_lang = self.config.source_lang
+        doc.target_lang = self.config.target_lang
 
         manifest = store.stage_document(doc)
         glossary = GlossaryStore(store.glossary_path)
         try:
             if progress:
-                progress(0, 0, "分析全书风格…")
-            sample = self._sample_text(doc)
+                progress(0, 0, ui_message("progress.analyzing_style"))
+            sample = self._sample_text(
+                doc,
+                target_lang=self.config.target_lang,
+            )
             analysis = self.analyzer.analyze(sample) if sample else {}
             if analysis:
                 self.analyzer.seed_glossary(glossary, analysis)
@@ -308,29 +339,37 @@ class Orchestrator:
 
     def _detect_language_ai(self, doc) -> str:
         """用模型检测正文主要语言，返回 ISO 代码（如 ja/en/ru）。失败返回空串。"""
-        # labeled=False：纯源文样本，防多点采样的中文标签污染语言检测
-        sample = self._sample_text(doc, labeled=False)[:1500]
+        # labeled=False：纯源文样本，防多点采样的位置标签污染语言检测
+        sample = self._sample_text(
+            doc,
+            labeled=False,
+            target_lang=self.config.target_lang,
+        )[:1500]
         if not sample.strip():
             return ""
-        system = (
-            "你是语言识别器。判断给定文本的主要自然语言，"
-            '仅输出 JSON：{"language":"<ISO 639-1 两字母代码，如 ja/en/ru/ko/fr/de/zh>"}。'
-            "无法判断时 language 置为空字符串。"
-        )
+        system = languages.language_detection_system()
         try:
             data = self.client.complete_json(
                 [{"role": "system", "content": system},
                  {"role": "user", "content": sample}], tier="cheap",
                 stage="language_detect")
             code = (data.get("language") if isinstance(data, dict) else "") or ""
-            return _normalize_lang(str(code))
+            return languages.normalize_detected_language(str(code))
         except Exception:
             return ""
 
     @staticmethod
-    def _sample_text(doc, *, labeled: bool = True) -> str:
-        """取风格分析样章。labeled=True 时多点采样（开头/中部/结尾各一段，带中文标注），
-        让分析覆盖全书风格全貌；labeled=False 返回单段纯源文（语言检测用，不能混入中文标签）。"""
+    def _sample_text(
+        doc,
+        *,
+        labeled: bool = True,
+        target_lang: str = "zh",
+    ) -> str:
+        """取风格分析样章。
+
+        ``labeled=True`` 时多点采样，并使用目标语言包的位置标签；
+        ``labeled=False`` 返回单段纯源文，供语言检测使用。
+        """
         texts = ["\n".join(s.source for s in ch.text_segments) for ch in doc.chapters]
         texts = [t for t in texts if len(t) > 200]
         if not texts:  # 兜底：全书都是短章
@@ -339,7 +378,12 @@ class Orchestrator:
             return joined[:6000]
         if not labeled:
             return texts[0][:6000]
-        picks = [(0, "开头样章"), (len(texts) // 2, "中部样章"), (len(texts) - 1, "结尾样章")]
+        opening, middle, closing = languages.sample_labels(target_lang)
+        picks = [
+            (0, opening),
+            (len(texts) // 2, middle),
+            (len(texts) - 1, closing),
+        ]
         parts: list[str] = []
         seen: set[int] = set()
         for idx, tag in picks:
@@ -347,8 +391,8 @@ class Orchestrator:
                 continue
             seen.add(idx)
             t = texts[idx]
-            chunk = t[-2800:] if tag == "结尾样章" else t[:2800]
-            parts.append(f"【{tag}】\n{chunk}")
+            chunk = t[-2800:] if tag == closing else t[:2800]
+            parts.append(languages.sample_block(tag, chunk, target=target_lang))
         return "\n\n".join(parts)
 
     def run(self, input_path: str, *, only_chapter: int | None = None,
@@ -372,9 +416,7 @@ class Orchestrator:
         store = self.prepare(input_path, progress=progress)
         with store.lock():
             manifest = store.load_manifest()
-            self._apply_language(
-                manifest.get("source_lang") or self.config.source_lang
-            )
+            self._restore_manifest_languages(manifest)
             try:
                 self._build_understanding(store, progress=progress)
                 store.log_event(
@@ -395,7 +437,7 @@ class Orchestrator:
     ) -> RunStore:
         """恢复语言和上下文，依次翻译章节并持续保存用量与进度。"""
         manifest = store.load_manifest()
-        self._apply_language(manifest.get("source_lang") or self.config.source_lang)
+        self._restore_manifest_languages(manifest)
         chapter_indices = {
             chapter.get("index") for chapter in manifest.get("chapters", [])
         }
@@ -404,10 +446,16 @@ class Orchestrator:
                 index for index in chapter_indices if isinstance(index, int)
             )
             valid_range = (
-                f"0–{available[-1]}" if available else "无可翻译章节"
+                f"0–{available[-1]}"
+                if available
+                else ui_message("value.no_translatable_chapters")
             )
             raise ValueError(
-                f"章节编号 {only_chapter} 不存在；可用范围：{valid_range}"
+                ui_message(
+                    "error.chapter_not_found",
+                    chapter=only_chapter,
+                    range=valid_range,
+                )
             )
         glossary = GlossaryStore(store.glossary_path)
         context = RollingContext.from_dict(
@@ -448,7 +496,7 @@ class Orchestrator:
             glossary.close()
             self._flush_usage(store, scope="translate")
         if progress and total:
-            progress(total, total, "翻译完成")
+            progress(total, total, ui_message("progress.translation_complete"))
         store.log_event("translate_run_finished", total_segments=total)
         return store
 
@@ -500,7 +548,7 @@ class Orchestrator:
             )
             workers = max(1, self.config.pipeline.prescan_concurrency)
             if progress:
-                progress(0, len(todo), "预扫章节梗概")
+                progress(0, len(todo), ui_message("progress.prescan_chapters"))
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futs = {ex.submit(self.synopsizer.digest_chapter, src): ci
                         for ci, src in todo}
@@ -514,7 +562,11 @@ class Orchestrator:
                         digest=loaded[ci].meta["source_digest"],
                     )
                     if progress:
-                        progress(n_done, len(todo), "预扫章节梗概")
+                        progress(
+                            n_done,
+                            len(todo),
+                            ui_message("progress.prescan_chapters"),
+                        )
 
         # 按 manifest 章序组装（与并发完成顺序无关）
         digests = [loaded[c.get("index", i)].meta.get("source_digest", "") or ""
@@ -524,7 +576,7 @@ class Orchestrator:
         synopsis = analysis.get("book_synopsis", "")
         if not synopsis and any(d.strip() for d in digests):
             if progress:
-                progress(0, 0, "生成全书概览…")
+                progress(0, 0, ui_message("progress.generating_overview"))
             synopsis = self.synopsizer.book_synopsis(
                 digests, self.analyzer.style_brief(analysis))
             analysis["book_synopsis"] = synopsis
@@ -535,9 +587,10 @@ class Orchestrator:
     # ── 章节标题 / 目录项翻译（书名保持原文）──────────────────────────────
     def _translate_titles(self, store: RunStore, glossary: GlossaryStore,
                           progress: Optional[ProgressFn] = None) -> None:
-        """把各章标题和额外目录项翻成中文，写回 manifest（幂等：已全部译过则跳过）。
+        """把各章标题和额外目录项翻成目标语言并写回 manifest。
 
-        书名保持原文，不写 title_translated；借术语表保证章节标题里的专名一致。
+        幂等：已全部译过则跳过。书名保持原文，不写 title_translated；
+        借术语表保证章节标题里的专名一致。
         """
         from ..agents import prompts
 
@@ -573,13 +626,17 @@ class Orchestrator:
         if not any(t.strip() for t in titles):
             return
         if progress:
-            progress(0, 0, "翻译章节标题…")
-        system = prompts.render("title_translator_system",
-                                src=self.config.source_lang, tgt=self.config.target_lang,
-                                n=len(titles))
+            progress(0, 0, ui_message("progress.translating_titles"))
+        system = prompts.render(
+            "title_translator_system",
+            src=self.config.source_lang,
+            tgt=self.config.target_lang,
+        )
         user = prompts.render("title_translator_user",
                               src=self.config.source_lang, tgt=self.config.target_lang,
-                              glossary=prompts.render_glossary(glossary.all_terms()),
+                              glossary=prompts.render_glossary(
+                                  glossary.all_terms(), tgt=self.config.target_lang
+                              ),
                               n=len(titles), numbered_titles=prompts.numbered(titles))
         try:
             data = self.client.complete_json(
@@ -719,9 +776,10 @@ class Orchestrator:
         # 标点在章级统一处理，直引号状态才能跨批次、跨段保持连续。
         if self._punctuation_enabled():
             translated = [segment.target or "" for segment in text_segs]
-            normalized_targets = normalize_zh_segments(
+            normalized_targets = languages.normalize_punctuation_segments(
                 translated,
                 [segment.cont for segment in text_segs],
+                target=self.config.target_lang,
             )
             for segment, normalized in zip(text_segs, normalized_targets):
                 segment.target = normalized
@@ -786,7 +844,7 @@ class Orchestrator:
     def _chapter_progress_label(title: str, index: int) -> str:
         """进度展示用章节名：优先用书内标题，避免内部序号与“第一章”等标题冲突。"""
         title = (title or "").strip()
-        return title or f"章节 {index + 1}"
+        return title or ui_message("progress.chapter_fallback", chapter=index + 1)
 
     def _extract_batch_glossary(self, glossary: GlossaryStore, store: RunStore,
                                 chapter: int, start_index: int, batch) -> dict[str, int]:
@@ -805,7 +863,7 @@ class Orchestrator:
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation")
-    _REVIEW_SCHEMA_VERSION = 1
+    _REVIEW_SCHEMA_VERSION = 3
 
     def _review_digest(self, text_segs, terms, *, autofix: bool) -> str:
         """计算一章审校输入摘要，用于识别可安全跳过的重复审校。
@@ -830,6 +888,7 @@ class Orchestrator:
                     "type": term.type,
                     "gender": term.gender,
                     "aliases": term.aliases,
+                    "note": term.note,
                 }
                 for term in terms
             ],
@@ -864,8 +923,10 @@ class Orchestrator:
             joined = ", ".join(str(index) for index in pending[:10])
             suffix = "…" if len(pending) > 10 else ""
             raise ValueError(
-                "全书审校要求所有章节先完成翻译；"
-                f"仍待翻译章节：{joined}{suffix}"
+                ui_message(
+                    "error.review_incomplete",
+                    chapters=f"{joined}{suffix}",
+                )
             )
 
         do_autofix = (
@@ -898,7 +959,10 @@ class Orchestrator:
             digest = self._review_digest(
                 text_segs, term_snapshot, autofix=do_autofix
             )
-            label = f"全书审校：{self._chapter_progress_label(chapter.title, ci)}"
+            label = ui_message(
+                "progress.review_chapter",
+                chapter=self._chapter_progress_label(chapter.title, ci),
+            )
 
             if (
                 not force
@@ -1020,8 +1084,11 @@ class Orchestrator:
                     chunk_issues.append(it)
                 else:
                     warnings.warn(
-                        f"忽略无效审校索引 {it.get('index')!r}；"
-                        f"当前审校块长度为 {len(chunk)}",
+                        ui_message(
+                            "warning.review_index_invalid",
+                            index=repr(it.get("index")),
+                            count=len(chunk),
+                        ),
                         RuntimeWarning,
                         stacklevel=2,
                     )
@@ -1075,16 +1142,25 @@ class Orchestrator:
                                for j in range(max(0, idx - 2), idx))
             after = "\n".join(text_segs[j].target or ""
                               for j in range(idx + 1, min(len(text_segs), idx + 3)))
-            feedback = "；".join(
-                f"{it.get('detail', '')}（建议：{it.get('suggestion', '')}）"
-                for it in seg_issues)
+            feedback = languages.autofix_feedback(
+                seg_issues,
+                target=self.config.target_lang,
+            )
             new_t = self.translator.retranslate_with_feedback(
                 seg.source, feedback=feedback, glossary_terms=terms, style=style,
                 context_before=before, context_after=after,
                 book_synopsis=book_synopsis, chapter_digest=chapter_digest)
-            if new_t and not checks.length_flags([seg.source], [new_t]):
+            if new_t and not checks.length_flags(
+                [seg.source],
+                [new_t],
+                source_lang=self.config.source_lang,
+                target_lang=self.config.target_lang,
+            ):
                 if self._punctuation_enabled():
-                    new_t = normalize_zh(new_t)
+                    new_t = languages.normalize_punctuation(
+                        new_t,
+                        target=self.config.target_lang,
+                    )
                 old_t = seg.target
                 seg.target = new_t
                 for it in seg_issues:
@@ -1153,9 +1229,7 @@ class Orchestrator:
         store = self._locate_existing_store(input_path, progress=progress)
         with store.lock():
             manifest = store.load_manifest()
-            self._apply_language(
-                manifest.get("source_lang") or self.config.source_lang
-            )
+            self._restore_manifest_languages(manifest)
             glossary = GlossaryStore(store.glossary_path)
             try:
                 issues = self._review_book(
@@ -1182,7 +1256,7 @@ class Orchestrator:
         else:
             store = self.prepare(input_path, progress=progress)
             m = store.load_manifest()
-            self._apply_language(m.get("source_lang") or self.config.source_lang)
+            self._restore_manifest_languages(m)
         with store.lock():
             return self._finish_steps_locked(
                 store,
@@ -1226,7 +1300,7 @@ class Orchestrator:
 
             if "qa" in steps:
                 if progress:
-                    progress(0, 0, "一致性 QA…")
+                    progress(0, 0, ui_message("progress.consistency_qa"))
                 qa_issues = ConsistencyChecker(self.client, self.config).check(store, glossary)
                 store.log_event(
                     "consistency_qa_finished",
@@ -1237,7 +1311,7 @@ class Orchestrator:
             self._flush_usage(store, scope="pipeline")
             if "report" in steps:
                 if progress:
-                    progress(0, 0, "生成报告…")
+                    progress(0, 0, ui_message("progress.generating_report"))
                 report = build_report(store, glossary)
                 report["consistency_issues"] = qa_issues
                 store.save_report(report)
@@ -1249,7 +1323,7 @@ class Orchestrator:
         outputs: list[str] = []
         if "assemble" in steps:
             if progress:
-                progress(0, 0, "回填译文…")
+                progress(0, 0, ui_message("progress.assembling_translation"))
             out_cfg = self.config.output
             do_mono, do_bilingual = out_cfg.mono, out_cfg.bilingual
             if not do_mono and not do_bilingual:
