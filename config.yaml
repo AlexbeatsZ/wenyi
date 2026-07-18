@@ -2,20 +2,22 @@
 # 修改后无需改代码；模型提供商、流水线和输出开关都在这里。
 
 language:
-  source: auto # auto 由模型识别来源语言；也可写死 ja / en / ko / ru / de 等语言代码
+  source: ja # 已知为日文轻小说，写死 ja 可省去语言检测调用
   target: zh # 译文语言
 
 # ── LLM ──────────────────────────────────────────────────────────────────
 llm:
   # deepseek | openai | openrouter | openai-compatible | ollama | vllm | fake
-  provider: deepseek
-  base_url: https://api.deepseek.com
-  api_key_env: DEEPSEEK_API_KEY
+  provider: openai-compatible
+  # OpenAI SDK 会自动追加 /chat/completions，因此这里只填到 /v1。
+  base_url: https://token.sensenova.cn/v1
+  api_key_env: SENSENOVA_API_KEY
+  reasoning_style: deepseek
   timeout: 600
   max_retries: 4
   tiers:
     strong:
-      model: deepseek-v4-pro
+      model: deepseek-v4-flash
       options:
         thinking: true
         reasoning_effort: high
