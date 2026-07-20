@@ -108,6 +108,7 @@ class TestTranslatorAlignment(unittest.TestCase):
         self.assertNotIn("后文身份反转", fallback_user)
         self.assertNotIn("本章结局", fallback_user)
         self.assertIn("当前原文", fallback_user)
+        self.assertEqual(len(client.calls), 3)
 
 class TestTranslatorPromptOrder(unittest.TestCase):
     def test_static_chapter_digest_precedes_dynamic_glossary(self):

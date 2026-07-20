@@ -146,6 +146,10 @@ class Translator(Agent):
                     book_synopsis,
                     chapter_digest,
                 )
+            except ContentPolicyError:
+                # Replaying the identical batch cannot fix a policy decision;
+                # move immediately to per-segment localisation instead.
+                break
             except Exception:
                 pass
 
