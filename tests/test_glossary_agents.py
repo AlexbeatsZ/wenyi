@@ -12,6 +12,7 @@ from trans_novel.llm.providers.fake import FakeClient
 from trans_novel.glossary.store import GlossaryStore
 from trans_novel.glossary.extractor import GlossaryExtractor
 from trans_novel.agents.analyzer import Analyzer
+from trans_novel.agents import langprofile
 from trans_novel.pipeline.context import RollingContext
 
 
@@ -24,6 +25,13 @@ def _cfg():
 
 
 class TestAnalyzer(unittest.TestCase):
+    def test_japanese_pronoun_guidance_balances_naturalness_and_uncertainty(self):
+        guidance = langprofile.translate_guidance("ja")
+
+        self.assertIn("不得为了保守而机械回避代词", guidance)
+        self.assertIn("只影响当前叙事表达，不升级为全书永久事实", guidance)
+        self.assertIn("身份悬念", guidance)
+
     def test_analyze_and_seed(self):
         analysis = {
             "genre": "校园", "tone": "冷峻第三人称",
