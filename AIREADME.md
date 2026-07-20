@@ -1,7 +1,7 @@
 # Project Goal
 
 - 使用 Wenyi 将长篇小说可靠地翻译为简体中文，并保留 EPUB 的目录、样式、图片和锚点。
-- 当前任务：通过本机 agy CLI 断点续译指定的日文 EPUB；模型档位为 Gemini 3.1 Pro / 3.5 Flash。
+- 当前任务：通过本机 agy CLI 断点续译指定的日文 EPUB；全部主要翻译与润色改用 Gemini 3.5 Flash (Medium)。
 - 为正在翻译的小说提供只读局域网阅读页，允许手机边看当前译文边等待后续章节完成。
 
 # Lessons Learned
@@ -41,7 +41,8 @@
 - [x] 相关 16 项测试通过；完整测试 244 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
 - [x] 新增 `punctuation.quote_style`：默认 `source`，翻译/润色/标题提示词和确定性后处理统一沿用 `「」『』`；保留 `zh-cn` 可选项。
 - [x] 对《屈曲ラヴァー》现有状态完整备份后迁移：137 个章节文件中已译 14,636 段，8,908 个 target 改为直角引号；仅 target 字段变化，已译逻辑段边界违规为 0，未译 2,093 段保持为空。
-- [ ] 全书断点续译已于 2026-07-20 23:58 通过 agy 后台启动（根 PID 34328）；首批 44 段已落盘，ch126 已译段由 159 增至 203，剩余空 target 2,049 个，任务正自动处理下一批。
+- [ ] 全书 agy 断点续译正在后台运行；实时进度以 `trans-novel status` 或阅读页为准。
 - [x] 按用户要求直接用 agy 配置覆盖 SenseNova（不备份旧配置）；创建隔离运行目录并完成 fast JSON 与 strong Translator 真实烟测。
 - [x] 修复 agy 1.1.4 模型短 ID 兼容，并固定 `--mode plan` 防止 headless 翻译误触写文件权限。
 - [x] 正式续译首批验证：44 段全部非空，`「」『』` 逻辑边界违规为 0，润色与术语抽取事件均成功；stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260720-235826.*.log`。
+- [x] Pro High 速度不符合用户要求；在 ch126 已译 256 段处安全终止旧进程树，改由 Gemini 3.5 Flash (Medium) 接管 strong/cheap 档后断点续跑。
