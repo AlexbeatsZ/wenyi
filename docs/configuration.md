@@ -157,21 +157,24 @@ llm:
       model: Gemini 3.5 Flash (Low)
 ```
 
-Antigravity CLI 1.0.x does not expose a per-request system-prompt flag or a
+Antigravity CLI does not expose a per-request system-prompt flag or a
 native JSON response mode. Wenyi therefore labels system, user, and assistant
 content and folds them into one ordinary `--print` prompt. JSON requests add a
 plain-text output constraint and are parsed by Wenyi afterwards. Calls are
-fresh and serialized: Wenyi never passes `--continue`, and concurrent pipeline
-stages wait for the prior agy process to finish to avoid local state-file races.
+fresh, serialized, and run with `--mode plan`: Wenyi never passes `--continue`,
+plan mode prevents translation prompts from requesting file-writing tools, and
+concurrent pipeline stages wait for the prior agy process to finish to avoid
+local state-file races.
 The CLI also does not report token usage, so Wenyi's usage totals for this
 provider are character-based estimates rather than billable token counts.
 For compatibility with OpenClaw configurations, the short IDs
 `gemini-3.1-pro[-low|-high]` and
-`gemini-3.5-flash[-low|-medium|-high]` are mapped to the display names accepted
-by agy 1.0.13.
+`gemini-3.5-flash[-low|-medium|-high]` are sent as short IDs for agy 1.1. Wenyi
+falls back to agy 1.0 display names only after an explicit unknown-model error,
+then caches the successful form.
 
-`cwd` may be set to choose the workspace visible to agy. This basic adapter is
-not a security boundary; use an operating-system sandbox or container when
+`cwd` may be set to choose the workspace visible to agy. Plan mode is not an
+operating-system security boundary; use an OS sandbox or container when
 untrusted prompts or stronger filesystem isolation are involved.
 
 ## Pipeline

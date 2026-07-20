@@ -1,7 +1,7 @@
 # Project Goal
 
 - 使用 Wenyi 将长篇小说可靠地翻译为简体中文，并保留 EPUB 的目录、样式、图片和锚点。
-- 当前任务：通过 SenseNova 的 OpenAI Chat Completions 兼容端点，使用 `deepseek-v4-flash` 翻译指定的日文 EPUB。
+- 当前任务：通过本机 agy CLI 断点续译指定的日文 EPUB；模型档位为 Gemini 3.1 Pro / 3.5 Flash。
 - 为正在翻译的小说提供只读局域网阅读页，允许手机边看当前译文边等待后续章节完成。
 
 # Lessons Learned
@@ -16,6 +16,8 @@
 - 手机端浏览器 QA 发现窄屏下手动查询按钮会被挤压，已为按钮设置固定宽度；390×844 视口下章节切换、查询和字号切换均正常。
 - Antigravity CLI 1.0.x 没有单次原生 system prompt 参数；参考 OpenClaw 的适配方式，应将角色内容折叠为一条普通 `--print` 提示词，并明确这不是安全隔离边界。
 - 本机 agy 1.0.13 的 `--model` 要求 `Gemini 3.5 Flash (Medium)` 这类显示名；OpenClaw 风格的短 ID 需要在 provider 内映射。agy 不返回 token usage，只能明确记录字符估算值。
+- agy 1.1.4 的 `models` 仍显示友好名称，但 `--model` 实际优先接受 `gemini-3.5-flash-low` 这类短 ID；provider 应短 ID 优先，仅对明确的 unknown-model 错误回退旧显示名并缓存结果。
+- agy 1.1.4 的 headless print 模式可能把普通翻译提示误判成写文件任务；传入 `--mode plan` 可禁止工具写入并正常返回译文，且无需放宽全局权限。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
 - 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
@@ -40,3 +42,5 @@
 - [x] 新增 `punctuation.quote_style`：默认 `source`，翻译/润色/标题提示词和确定性后处理统一沿用 `「」『』`；保留 `zh-cn` 可选项。
 - [x] 对《屈曲ラヴァー》现有状态完整备份后迁移：137 个章节文件中已译 14,636 段，8,908 个 target 改为直角引号；仅 target 字段变化，已译逻辑段边界违规为 0，未译 2,093 段保持为空。
 - [ ] 全书仍有 2,093 个空 target（从 ch126 后段起）；当前无运行中的 Wenyi/agy 进程，需用户决定何时断点续译。
+- [x] 按用户要求直接用 agy 配置覆盖 SenseNova（不备份旧配置）；创建隔离运行目录并完成 fast JSON 与 strong Translator 真实烟测。
+- [x] 修复 agy 1.1.4 模型短 ID 兼容，并固定 `--mode plan` 防止 headless 翻译误触写文件权限。

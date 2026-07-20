@@ -60,6 +60,8 @@ class TestAgyClient(unittest.TestCase):
         self.assertEqual(result, "你好")
         args = run.call_args.args[0]
         self.assertEqual(args[:3], ["custom-agy", "--model", "flash-model"])
+        self.assertIn("--mode", args)
+        self.assertEqual(args[args.index("--mode") + 1], "plan")
         self.assertIn("--print", args)
         self.assertNotIn("--continue", args)
         self.assertIn("こんにちは", args[-1])
@@ -94,7 +96,7 @@ class TestAgyClient(unittest.TestCase):
             AgyClient(_config(cwd="definitely-missing-agy-directory").llm)
 
     @patch("trans_novel.llm.providers.agy.subprocess.run")
-    def test_maps_openclaw_short_model_id_for_current_agy(self, run):
+    def test_uses_stable_short_model_id_first(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, "ok", "")
         cfg = _config(tiers={"strong": {"model": "gemini-3.5-flash-high"}})
 
@@ -102,6 +104,32 @@ class TestAgyClient(unittest.TestCase):
 
         self.assertEqual(
             run.call_args.args[0][1:3],
+            ["--model", "gemini-3.5-flash-high"],
+        )
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_falls_back_to_legacy_display_name_only_when_slug_is_unknown(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess(
+                [],
+                1,
+                "",
+                "model gemini-3.5-flash-high is not recognized as a known model",
+            ),
+            subprocess.CompletedProcess([], 0, "ok", ""),
+        ]
+        cfg = _config(tiers={"strong": {"model": "Gemini 3.5 Flash (High)"}})
+
+        result = AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            run.call_args_list[0].args[0][1:3],
+            ["--model", "gemini-3.5-flash-high"],
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0][1:3],
             ["--model", "Gemini 3.5 Flash (High)"],
         )
 

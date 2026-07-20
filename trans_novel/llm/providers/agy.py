@@ -19,15 +19,19 @@ _DEFAULT_TIERS = {
     "cheap": TierConfig(model="Gemini 3.5 Flash (Medium)"),
     "fast": TierConfig(model="Gemini 3.5 Flash (Low)"),
 }
-_MODEL_ALIASES = {
-    # OpenClaw agy provider 使用的稳定短 ID -> agy 1.0.13 接受的显示名。
-    "gemini-3.1-pro": "Gemini 3.1 Pro (Low)",
+_MODEL_DISPLAY_NAMES = {
     "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
     "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
-    "gemini-3.5-flash": "Gemini 3.5 Flash (Medium)",
-    "gemini-3.5-flash-low": "Gemini 3.5 Flash (Low)",
     "gemini-3.5-flash-medium": "Gemini 3.5 Flash (Medium)",
+    "gemini-3.5-flash-low": "Gemini 3.5 Flash (Low)",
     "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
+}
+_MODEL_ALIASES = {
+    "gemini-3.1-pro": "gemini-3.1-pro-low",
+    "gemini-3.5-flash": "gemini-3.5-flash-medium",
+}
+_DISPLAY_NAME_TO_MODEL = {
+    display.casefold(): model for model, display in _MODEL_DISPLAY_NAMES.items()
 }
 _ROLE_LABELS = {
     "system": "System",
@@ -70,6 +74,24 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text).strip()
 
 
+def _model_candidates(model: str) -> list[str]:
+    """优先返回 agy 1.1 短 ID，并为 agy 1.0 保留显示名回退。"""
+    key = model.casefold()
+    short_id = _MODEL_ALIASES.get(key, key)
+    if short_id in _MODEL_DISPLAY_NAMES:
+        return [short_id, _MODEL_DISPLAY_NAMES[short_id]]
+    if key in _DISPLAY_NAME_TO_MODEL:
+        short_id = _DISPLAY_NAME_TO_MODEL[key]
+        return [short_id, _MODEL_DISPLAY_NAMES[short_id]]
+    return [model]
+
+
+def _is_unknown_model_error(detail: str) -> bool:
+    """只对 agy 明确报告的模型名不识别错误启用兼容回退。"""
+    lowered = detail.casefold()
+    return "model" in lowered and "not recognized as a known model" in lowered
+
+
 class AgyClient(LLMClient):
     """每次以全新 ``agy --print`` 调用执行请求的 CLI provider。"""
 
@@ -81,6 +103,7 @@ class AgyClient(LLMClient):
             raise ValueError(f"agy provider 的 cwd 不是现有目录：{self.cwd}")
         self.timeout = max(1, int(cfg.timeout))
         self.tiers = {**_DEFAULT_TIERS, **cfg.tiers}
+        self._resolved_models: dict[str, str] = {}
         # agy 会维护本机项目/会话状态；串行化与 OpenClaw 的适配策略一致，
         # 避免 Wenyi 并发阶段在 Windows 上争用同一状态文件。
         self._process_lock = threading.Lock()
@@ -100,33 +123,50 @@ class AgyClient(LLMClient):
         model = tier_config.model
         if not model:
             raise ValueError(f"agy provider 的 {tier} 档未配置 model")
-        model = _MODEL_ALIASES.get(model.lower(), model)
 
         prompt = format_agy_prompt(messages, json_mode=json_mode)
         if not prompt:
             raise ValueError("agy provider 收到空提示词")
 
-        args = [
-            self.command,
-            "--model",
-            model,
-            "--print-timeout",
-            f"{self.timeout}s",
-            "--print",
-            prompt,
-        ]
+        model_key = model.casefold()
+        candidates = (
+            [self._resolved_models[model_key]]
+            if model_key in self._resolved_models
+            else _model_candidates(model)
+        )
         try:
             with self._process_lock:
-                result = subprocess.run(
-                    args,
-                    cwd=self.cwd,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=self.timeout + 5,
-                    check=False,
-                )
+                for index, candidate in enumerate(candidates):
+                    args = [
+                        self.command,
+                        "--model",
+                        candidate,
+                        "--mode",
+                        "plan",
+                        "--print-timeout",
+                        f"{self.timeout}s",
+                        "--print",
+                        prompt,
+                    ]
+                    result = subprocess.run(
+                        args,
+                        cwd=self.cwd,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=self.timeout + 5,
+                        check=False,
+                    )
+                    stdout = _strip_ansi(result.stdout or "")
+                    stderr = _strip_ansi(result.stderr or "")
+                    detail = stderr or stdout or "无错误输出"
+                    has_fallback = index + 1 < len(candidates)
+                    if result.returncode == 0:
+                        self._resolved_models[model_key] = candidate
+                        break
+                    if not (has_fallback and _is_unknown_model_error(detail)):
+                        raise RuntimeError(f"agy CLI 退出码 {result.returncode}：{detail}")
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"找不到 agy CLI：{self.command!r}；请先安装并确认其位于 PATH"
@@ -134,10 +174,7 @@ class AgyClient(LLMClient):
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"agy CLI 调用在 {self.timeout} 秒后超时") from exc
 
-        stdout = _strip_ansi(result.stdout or "")
-        stderr = _strip_ansi(result.stderr or "")
         if result.returncode != 0:
-            detail = stderr or stdout or "无错误输出"
             raise RuntimeError(f"agy CLI 退出码 {result.returncode}：{detail}")
 
         text = stdout or stderr

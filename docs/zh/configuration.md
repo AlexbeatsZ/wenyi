@@ -170,17 +170,18 @@ llm:
       model: Gemini 3.5 Flash (Low)
 ```
 
-Antigravity CLI 1.0.x 没有单次请求的原生 system prompt 参数，也没有原生
+Antigravity CLI 没有单次请求的原生 system prompt 参数，也没有原生
 JSON response mode。Wenyi 会把 system、user、assistant 内容标注角色后折叠为
 一条普通 `--print` 提示词；JSON 请求则追加纯文本输出约束，再交给 Wenyi 解析。
-每次调用都是新会话，不传 `--continue`。调用会串行执行，避免流水线并发阶段争用
-agy 的本地状态文件。agy 不返回 token usage，因此该 provider 的用量数据只是按
-字符数估算，不等同于计费 token。
+每次调用都是新会话，不传 `--continue`，并固定使用 `--mode plan`，避免翻译请求
+触发文件写入等工具权限。调用会串行执行，避免流水线并发阶段争用 agy 的本地状态
+文件。agy 不返回 token usage，因此该 provider 的用量数据只是按字符数估算，不等
+同于计费 token。
 为了兼容 OpenClaw 的配置，`gemini-3.1-pro[-low|-high]` 和
-`gemini-3.5-flash[-low|-medium|-high]` 这组短 ID 会自动映射为 agy 1.0.13
-实际接受的显示名。
+`gemini-3.5-flash[-low|-medium|-high]` 这组短 ID 会优先传给 agy 1.1；只有 CLI
+明确报告模型名不识别时，才回退到 agy 1.0 接受的显示名，并缓存成功选择。
 
-可通过 `cwd` 指定 agy 可见的工作目录。这个基础适配器不是安全隔离边界；处理
+可通过 `cwd` 指定 agy 可见的工作目录。plan 模式不是操作系统安全隔离边界；处理
 不可信提示词或需要严格隔离文件系统时，应另用操作系统沙箱或容器。
 
 ## 流水线
