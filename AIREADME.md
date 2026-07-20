@@ -20,6 +20,8 @@
 - agy 1.1.4 偶尔会在新进程启动时短暂把有效短 ID 报为 unknown；应先重试短 ID，再回退旧显示名，否则会把暂态注册表竞态放大为整次翻译退出。
 - agy 1.1.4 的 headless print 模式可能把普通翻译提示误判成写文件任务；传入 `--mode plan` 可禁止工具写入并正常返回译文，且无需放宽全局权限。
 - 即使使用 `--mode plan`，agy 1.1.4 仍可能偶发请求 `write_file` 并在 headless 模式自动拒绝；provider 必须明确要求纯文本回答、识别该拒绝文本并用全新会话有限重试，绝不能用 `--dangerously-skip-permissions` 绕过。
+- agy/Gemini 的内容策略拒绝会以退出码 0 的普通英文文本返回，而不是 JSON 或 CLI 错误；这与工具权限拒绝不同。第 129 章曾因完整提示中的高中生/年龄差恋爱背景与牵手段落组合触发 Google sensitive-words 过滤，批量与逐段兜底均失败。
+- Windows PID 会快速复用；后台任务是否仍运行应以 `trans-novel status` 的书级锁为准，再结合进程映像名和创建时间，不能只检查上次记录的 PID。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
 - 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
@@ -28,7 +30,7 @@
 - [x] 检查项目配置、CLI 文档、源 EPUB 和 Git 状态。
 - [x] 验证 SenseNova 端点、模型 ID、JSON 模式及 DeepSeek 思考参数。
 - [x] 完成 `prepare`，保留项目自动生成的风格指南。
-- [ ] 后台自动翻译整本 EPUB；当前 agy 续译进程 PID 4024 正常，错误日志为空，完成后会自动组装输出，实时进度可从阅读页或 `trans-novel status` 查看。
+- [ ] 后台自动翻译整本 EPUB；2026-07-21 00:44 在第 129 章因 Google 内容策略拒绝中止，目前书级状态为空闲；第 128 章已完整落盘。
 - [ ] 翻译完成后检查 `output` 目录中的中文 EPUB；可用 `trans-novel status` 随时查看进度，同一命令可断点续跑。
 - [x] 新增 `reader` 局域网移动阅读器：暗色排版、每分钟自动查询、手动查询、章节导航、字号调节和原文对照开关。
 - [x] 阅读器通过 3 项自动测试及 390×844 手机视口交互检查；不会干扰后台翻译。
@@ -43,7 +45,7 @@
 - [x] 相关 16 项测试通过；完整测试 244 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
 - [x] 新增 `punctuation.quote_style`：默认 `source`，翻译/润色/标题提示词和确定性后处理统一沿用 `「」『』`；保留 `zh-cn` 可选项。
 - [x] 对《屈曲ラヴァー》现有状态完整备份后迁移：137 个章节文件中已译 14,636 段，8,908 个 target 改为直角引号；仅 target 字段变化，已译逻辑段边界违规为 0，未译 2,093 段保持为空。
-- [ ] 全书 agy 已从第 128 章断点续译；2026-07-21 00:41 实测该章由 32/215 增长至 135/215，日志为 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260721-003850.*.log`。
+- [ ] 全书 agy 已完成到第 128 章（215/215）；第 129 章 0/204，首批逐段兜底在章内第 7 段仍触发 sensitive-words 拒绝。诊断日志为 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260721-003850.stderr.log`。
 - [x] 按用户要求直接用 agy 配置覆盖 SenseNova（不备份旧配置）；创建隔离运行目录并完成 fast JSON 与 strong Translator 真实烟测。
 - [x] 修复 agy 1.1.4 模型短 ID 兼容，并固定 `--mode plan` 防止 headless 翻译误触写文件权限。
 - [x] 正式续译首批验证：44 段全部非空，`「」『』` 逻辑边界违规为 0，润色与术语抽取事件均成功；stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260720-235826.*.log`。
