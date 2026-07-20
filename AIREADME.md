@@ -111,3 +111,4 @@
 - [x] 新增独立 `review_llm` 与 `codex-cli` Adapter；当前配置使用 `gpt-5.6-sol` high 终审、24k 字符大块，真实 pronoun 错误烟测返回结构化问题。
 - [x] 精修失败改为可恢复质量门：旧事件扫描已识别当前干净状态 ch4 42段、ch6 47段、ch7 51段待补精修；续跑会按正确前文上下文重试，审校前拒绝静默放行。
 - [x] 新结构相关 300 项完整测试执行；298 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
+- [x] 核对并固化未来书籍的标准使用顺序：全新状态译前解析与事实门、Flash Medium 初译、Pro High 精修、Codex Sol High 终审、Pro High 严重项修复、QA/报告与 EPUB 结构验收；翻译和审校均支持批次级断点续跑。
