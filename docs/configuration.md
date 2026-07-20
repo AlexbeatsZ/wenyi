@@ -137,6 +137,43 @@ Choose a reasoning dialect according to the endpoint protocol, not the underlyin
 
 Local Ollama and vLLM endpoints are available through the `ollama` and `vllm` providers. Their default addresses are `http://localhost:11434/v1` and `http://localhost:8000/v1`, and neither requires an API key by default. Both require explicit model tiers. Ollama's OpenAI-compatible endpoint may use `reasoning_style: openai`; vLLM reasoning support depends on the model template and server arguments. When necessary, pass `enable_thinking` through `request_overrides.chat_template_kwargs`.
 
+### Antigravity CLI (agy)
+
+Use `provider: agy` to send each request to an installed and authenticated
+Antigravity CLI in non-interactive print mode:
+
+```yaml
+llm:
+  provider: agy
+  # Optional executable path; defaults to agy from PATH.
+  command: agy
+  timeout: 600
+  tiers:
+    strong:
+      model: Gemini 3.1 Pro (High)
+    cheap:
+      model: Gemini 3.5 Flash (Medium)
+    fast:
+      model: Gemini 3.5 Flash (Low)
+```
+
+Antigravity CLI 1.0.x does not expose a per-request system-prompt flag or a
+native JSON response mode. Wenyi therefore labels system, user, and assistant
+content and folds them into one ordinary `--print` prompt. JSON requests add a
+plain-text output constraint and are parsed by Wenyi afterwards. Calls are
+fresh and serialized: Wenyi never passes `--continue`, and concurrent pipeline
+stages wait for the prior agy process to finish to avoid local state-file races.
+The CLI also does not report token usage, so Wenyi's usage totals for this
+provider are character-based estimates rather than billable token counts.
+For compatibility with OpenClaw configurations, the short IDs
+`gemini-3.1-pro[-low|-high]` and
+`gemini-3.5-flash[-low|-medium|-high]` are mapped to the display names accepted
+by agy 1.0.13.
+
+`cwd` may be set to choose the workspace visible to agy. This basic adapter is
+not a security boundary; use an operating-system sandbox or container when
+untrusted prompts or stronger filesystem isolation are involved.
+
 ## Pipeline
 
 ```yaml

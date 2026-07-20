@@ -14,6 +14,8 @@
 - 翻译中的章节 JSON 会保留在 `state/<书名>/chapters`；局域网阅读器只读这些文件，不修改、不锁定，也不删除翻译状态。
 - 阅读页每 60 秒读取一次全书进度；仅当当前章节的文件修订时间发生变化时重载正文，并提供手动查询按钮。
 - 手机端浏览器 QA 发现窄屏下手动查询按钮会被挤压，已为按钮设置固定宽度；390×844 视口下章节切换、查询和字号切换均正常。
+- Antigravity CLI 1.0.x 没有单次原生 system prompt 参数；参考 OpenClaw 的适配方式，应将角色内容折叠为一条普通 `--print` 提示词，并明确这不是安全隔离边界。
+- 本机 agy 1.0.13 的 `--model` 要求 `Gemini 3.5 Flash (Medium)` 这类显示名；OpenClaw 风格的短 ID 需要在 provider 内映射。agy 不返回 token usage，只能明确记录字符估算值。
 
 # Task Board
 
@@ -25,3 +27,7 @@
 - [x] 新增 `reader` 局域网移动阅读器：暗色排版、每分钟自动查询、手动查询、章节导航、字号调节和原文对照开关。
 - [x] 阅读器通过 3 项自动测试及 390×844 手机视口交互检查；不会干扰后台翻译。
 - [x] 已创建本地提交；上游推送因仓库写权限不足而失败，本地提交暂未同步到 `origin/main`。
+- [x] 新增 `agy`/`agy-cli` provider：普通提示词传输、JSON 输出约束、短模型 ID 映射、串行调用与文档。
+- [x] agy provider 离线相关测试 39 项通过；真实普通翻译和 `complete_json()` 烟测均通过。
+- [x] 完整测试 219 项通过；仅 2 项既有 Windows `/tmp/output` 路径断言失败，与本次修改无关。
+- [x] agy provider 已提交到本地 `main`；推送 `origin/main` 再次因 `AlexbeatsZ` 对 `BigDawnGhost/wenyi` 无写权限返回 HTTP 403。

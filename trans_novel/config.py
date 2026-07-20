@@ -19,7 +19,7 @@ language:
 
 # ── LLM ──────────────────────────────────────────────────────────────────
 llm:
-  # deepseek | openai | openrouter | openai-compatible | ollama | vllm | fake
+  # deepseek | openai | openrouter | openai-compatible | ollama | vllm | agy | fake
   provider: deepseek
   base_url: https://api.deepseek.com
   api_key_env: DEEPSEEK_API_KEY
@@ -101,6 +101,8 @@ class LLMConfig(BaseModel):
     provider: str = "deepseek"
     base_url: str | None = None
     api_key_env: str | None = None
+    command: str | None = None
+    cwd: str | None = None
     reasoning_style: ReasoningStyle = "none"
     timeout: int = 600
     max_retries: int = 4
@@ -181,6 +183,8 @@ class Config(BaseModel):
             provider=llm_raw.get("provider", "deepseek"),
             base_url=llm_raw.get("base_url"),
             api_key_env=llm_raw.get("api_key_env"),
+            command=llm_raw.get("command"),
+            cwd=llm_raw.get("cwd"),
             reasoning_style=llm_raw.get("reasoning_style", "none"),
             timeout=llm_raw.get("timeout", 600),
             max_retries=llm_raw.get("max_retries", 4),
