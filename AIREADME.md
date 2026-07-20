@@ -25,6 +25,7 @@
 - 正文可配置为两阶段串行：`translation_llm` 用 SenseNova DeepSeek 快速初译，主 `llm` 用 AGY Gemini 对照原文与分层上下文精修。完整上下文不等于整本正文；全书概览、本章梗概、相关术语、最近最终译文和当前原文/初译对照即可。
 - Gemini 内容策略拒绝应在 AGY 内用全新会话有限重试；持续拒绝时先逐段定位，只把仍被拒绝的精修段落交给 `translation_llm`，不能让整批静默换模型。
 - AGY 在 Windows 上通过命令行参数接收提示词；标题翻译即使已按 40 项/4000 字分批，若每批仍注入上千条全量术语，也会触发 `CreateProcess` 的 `WinError 206`。标题批次只能注入当前标题实际命中的术语，provider 也应把 206 报为命令行过长而非误报 CLI 缺失。
+- 最终 EPUB 验收不能只确认 ZIP 可打开；还需运行 `7z t`，并核对 OPF manifest 文件均存在、spine idref 均能解析。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
 - 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
@@ -33,8 +34,8 @@
 - [x] 检查项目配置、CLI 文档、源 EPUB 和 Git 状态。
 - [x] 验证 SenseNova 端点、模型 ID、JSON 模式及 DeepSeek 思考参数。
 - [x] 完成 `prepare`，保留项目自动生成的风格指南。
-- [ ] 137 个正文逻辑章节均已翻译完成；当前待完成章节/目录标题翻译与 EPUB 组装。上次在标题进度 0/233 因全量术语导致 AGY Windows 命令行过长而中止。
-- [ ] 翻译完成后检查 `output` 目录中的中文 EPUB；可用 `trans-novel status` 随时查看进度，同一命令可断点续跑。
+- [x] 137 个正文逻辑章节、136/136 个目录标题和 137/137 个章节标题均已完成；最终流程正常退出，`trans-novel status` 显示空闲。
+- [x] 已生成并验证 `output/[榊ダダ] 屈曲ラヴァー〜身を滅ぼしてしまいそうな初恋〜.zh.epub`（938,917 bytes）：`7z t` 通过，OPF manifest 138 项、spine 138 项，缺失文件与无效 idref 均为 0。
 - [x] 新增 `reader` 局域网移动阅读器：暗色排版、每分钟自动查询、手动查询、章节导航、字号调节和原文对照开关。
 - [x] 阅读器通过 3 项自动测试及 390×844 手机视口交互检查；不会干扰后台翻译。
 - [x] 已创建 `AlexbeatsZ/wenyi` fork；3 个自有提交无冲突变基到 fork 的官方 v0.3.3 基线并推送到 `origin/main`，保留本地备份分支 `backup/pre-fork-rebase-20260720`。
@@ -48,7 +49,7 @@
 - [x] 相关 16 项测试通过；完整测试 244 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
 - [x] 新增 `punctuation.quote_style`：默认 `source`，翻译/润色/标题提示词和确定性后处理统一沿用 `「」『』`；保留 `zh-cn` 可选项。
 - [x] 对《屈曲ラヴァー》现有状态完整备份后迁移：137 个章节文件中已译 14,636 段，8,908 个 target 改为直角引号；仅 target 字段变化，已译逻辑段边界违规为 0，未译 2,093 段保持为空。
-- [ ] 全书已完成到第 128 章；第 129 章在 01:06 实测由 0/204 增长至 113/204，事件记录确认两批均为 `openai-compatible` 初译、`agy` 精修且未触发 policy fallback。当前日志为 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260721-010517.*.log`。
+- [x] 全书正文 137 章完成两阶段翻译；最终续跑跨过原标题阶段故障点并完成 EPUB 组装，stdout/stderr 为 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260721-020512.*.log`，stderr 为空。
 - [x] 按用户要求直接用 agy 配置覆盖 SenseNova（不备份旧配置）；创建隔离运行目录并完成 fast JSON 与 strong Translator 真实烟测。
 - [x] 修复 agy 1.1.4 模型短 ID 兼容，并固定 `--mode plan` 防止 headless 翻译误触写文件权限。
 - [x] 正式续译首批验证：44 段全部非空，`「」『』` 逻辑边界违规为 0，润色与术语抽取事件均成功；stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260720-235826.*.log`。
