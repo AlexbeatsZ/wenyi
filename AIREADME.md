@@ -28,7 +28,7 @@
 - [x] 检查项目配置、CLI 文档、源 EPUB 和 Git 状态。
 - [x] 验证 SenseNova 端点、模型 ID、JSON 模式及 DeepSeek 思考参数。
 - [x] 完成 `prepare`，保留项目自动生成的风格指南。
-- [ ] 后台自动翻译整本 EPUB；进程正常、错误日志为空，完成后会自动组装输出，实时进度可从阅读页查看。
+- [ ] 后台自动翻译整本 EPUB；当前 agy 续译进程 PID 4024 正常，错误日志为空，完成后会自动组装输出，实时进度可从阅读页或 `trans-novel status` 查看。
 - [ ] 翻译完成后检查 `output` 目录中的中文 EPUB；可用 `trans-novel status` 随时查看进度，同一命令可断点续跑。
 - [x] 新增 `reader` 局域网移动阅读器：暗色排版、每分钟自动查询、手动查询、章节导航、字号调节和原文对照开关。
 - [x] 阅读器通过 3 项自动测试及 390×844 手机视口交互检查；不会干扰后台翻译。
@@ -43,7 +43,7 @@
 - [x] 相关 16 项测试通过；完整测试 244 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
 - [x] 新增 `punctuation.quote_style`：默认 `source`，翻译/润色/标题提示词和确定性后处理统一沿用 `「」『』`；保留 `zh-cn` 可选项。
 - [x] 对《屈曲ラヴァー》现有状态完整备份后迁移：137 个章节文件中已译 14,636 段，8,908 个 target 改为直角引号；仅 target 字段变化，已译逻辑段边界违规为 0，未译 2,093 段保持为空。
-- [ ] 全书 agy 断点续译完成到第 127 章；第 128 章起待继续，最近一次因 agy 模型注册表启动竞态退出。
+- [ ] 全书 agy 已从第 128 章断点续译；2026-07-21 00:41 实测该章由 32/215 增长至 135/215，日志为 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260721-003850.*.log`。
 - [x] 按用户要求直接用 agy 配置覆盖 SenseNova（不备份旧配置）；创建隔离运行目录并完成 fast JSON 与 strong Translator 真实烟测。
 - [x] 修复 agy 1.1.4 模型短 ID 兼容，并固定 `--mode plan` 防止 headless 翻译误触写文件权限。
 - [x] 正式续译首批验证：44 段全部非空，`「」『』` 逻辑边界违规为 0，润色与术语抽取事件均成功；stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260720-235826.*.log`。
