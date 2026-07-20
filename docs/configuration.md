@@ -30,6 +30,41 @@ Selecting `deepseek` is enough for the built-in defaults:
 
 API keys are always read from environment variables so they are not accidentally committed with the configuration. Use `provider: fake` for offline tests that must not make network requests.
 
+### Separate initial translation and refinement models
+
+The top-level `translation_llm` block can assign body-text first drafts to a
+separate provider. The main `llm` continues to handle Gemini refinement,
+analysis, terminology, and other stages. `translation_llm` also handles only
+the individual refinement segment when Gemini explicitly rejects it under a
+content policy:
+
+```yaml
+llm:
+  provider: agy
+  command: agy
+  tiers:
+    strong:
+      model: Gemini 3.5 Flash (Medium)
+
+translation_llm:
+  provider: openai-compatible
+  base_url: https://token.sensenova.cn/v1
+  api_key_env: SENSENOVA_API_KEY
+  reasoning_style: deepseek
+  tiers:
+    strong:
+      model: deepseek-v4-flash
+      options:
+        thinking: true
+        reasoning_effort: high
+```
+
+With `pipeline.polish` enabled, each batch is first translated by DeepSeek and
+then refined by the main `llm` against the source text, draft, whole-book
+synopsis, chapter digest, relevant glossary, and recent finalized translation.
+Without `translation_llm`, first drafts continue to use the main `llm` for
+backward compatibility. API keys remain environment-only.
+
 The first PDF import also reads `MINERU_API_KEY` to call the MinerU conversion service. This key is independent of the LLM provider and is not written to `config.yaml`.
 
 Add the advanced fields only when you need a proxy, custom environment variable, timeout, retry policy, or model override:
@@ -196,7 +231,7 @@ pipeline:
 
 - `review`: disabled by default; when enabled, automatically run the independent final-review stage after the complete book has been translated. The explicit `trans-novel review` command remains available while this is disabled.
 - `autofix_severe`: during final review, retranslate severe omissions and mistranslations and adopt fixes that pass validation.
-- `polish`: run the strong model over translated batches again for style. This may improve quality but significantly increases runtime and cost.
+- `polish`: let the strong model refine each draft against the source and layered context. This may improve quality but significantly increases runtime and cost.
 - `backtranslate_sample`: fraction of translated segments to inspect through backtranslation; `0` disables it.
 - `consistency_qa`: run a final cross-chapter check of terminology, references, voice, and punctuation.
 - `rolling_context_segments`: number of recent translated segments included with each translation batch.

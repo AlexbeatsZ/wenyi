@@ -6,17 +6,38 @@
 
 from __future__ import annotations
 
+from ..config import Config
 from ..glossary.store import GlossaryTerm
+from ..llm.base import ContentPolicyError, LLMClient
 from . import prompts
 from .base import Agent
 
 
 class Polisher(Agent):
-    def polish(self, targets: list[str], *, glossary_terms: list[GlossaryTerm] | None = None,
-               style: str = "") -> list[str]:
-        """润色等长译文列表；调用失败或数量不符时原样返回输入。"""
-        if not targets:
-            return []
+    def __init__(
+        self,
+        client: LLMClient,
+        config: Config,
+        *,
+        fallback_client: LLMClient | None = None,
+    ) -> None:
+        super().__init__(client, config)
+        self.fallback_client = fallback_client
+        self.last_policy_fallback_indexes: list[int] = []
+
+    def _call(
+        self,
+        client: LLMClient,
+        targets: list[str],
+        *,
+        sources: list[str],
+        glossary_terms: list[GlossaryTerm],
+        style: str,
+        context: str,
+        book_synopsis: str,
+        chapter_digest: str,
+        stage: str,
+    ) -> list[str] | None:
         n = len(targets)
         system = prompts.render(
             "polisher_system", src=self.src, tgt=self.tgt, n=n,
@@ -24,11 +45,118 @@ class Polisher(Agent):
         )
         user = prompts.render(
             "polisher_user", src=self.src, tgt=self.tgt,
-            glossary=prompts.render_glossary(glossary_terms or []),
-            style=style or "（无）", n=n,
-            numbered_target=prompts.numbered(targets),
+            glossary=prompts.render_glossary(glossary_terms),
+            style=style or "（无）",
+            book_synopsis=book_synopsis or "（无）",
+            chapter_digest=chapter_digest or "（无）",
+            context=context or "（无）",
+            n=n,
+            pairs=prompts.numbered_pairs(sources, targets),
         )
-        items = self._ask_json(system, user, tier="strong", key="polished", default=None)
+        data = client.complete_json(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            tier="strong",
+            stage=stage,
+        )
+        items = data.get("polished") if isinstance(data, dict) else data
         if isinstance(items, list) and len(items) == n:
-            return [str(x) for x in items]
-        return list(targets)  # 失败/段数不符 → 保守保留原译
+            polished = [str(item).strip() for item in items]
+            if all(polished):
+                return polished
+        return None
+
+    def _polish_after_policy_rejection(
+        self,
+        targets: list[str],
+        *,
+        sources: list[str],
+        glossary_terms: list[GlossaryTerm],
+        style: str,
+        context: str,
+        book_synopsis: str,
+        chapter_digest: str,
+    ) -> list[str]:
+        """逐段定位 policy 拒绝，只把仍被拒绝的段落交给备用客户端。"""
+        polished: list[str] = []
+        for index, (source, target) in enumerate(zip(sources, targets)):
+            kwargs = {
+                "sources": [source],
+                "glossary_terms": glossary_terms,
+                "style": style,
+                "context": context,
+                "book_synopsis": book_synopsis,
+                "chapter_digest": chapter_digest,
+            }
+            try:
+                result = self._call(
+                    self.client,
+                    [target],
+                    stage="Polisher",
+                    **kwargs,
+                )
+            except ContentPolicyError:
+                result = None
+                if self.fallback_client is not None:
+                    try:
+                        result = self._call(
+                            self.fallback_client,
+                            [target],
+                            stage="PolisherPolicyFallback",
+                            **kwargs,
+                        )
+                    except Exception:
+                        result = None
+                    if result:
+                        self.last_policy_fallback_indexes.append(index)
+            except Exception:
+                result = None
+            polished.append(result[0] if result else target)
+        return polished
+
+    def polish(
+        self,
+        targets: list[str],
+        *,
+        sources: list[str] | None = None,
+        glossary_terms: list[GlossaryTerm] | None = None,
+        style: str = "",
+        context: str = "",
+        book_synopsis: str = "",
+        chapter_digest: str = "",
+    ) -> list[str]:
+        """对照原文精修；policy 拒绝时逐段定位并只回退问题段。"""
+        if not targets:
+            return []
+        sources = list(sources or [""] * len(targets))
+        if len(sources) != len(targets):
+            return list(targets)
+        terms = glossary_terms or []
+        self.last_policy_fallback_indexes = []
+        try:
+            result = self._call(
+                self.client,
+                targets,
+                sources=sources,
+                glossary_terms=terms,
+                style=style,
+                context=context,
+                book_synopsis=book_synopsis,
+                chapter_digest=chapter_digest,
+                stage="Polisher",
+            )
+        except ContentPolicyError:
+            return self._polish_after_policy_rejection(
+                targets,
+                sources=sources,
+                glossary_terms=terms,
+                style=style,
+                context=context,
+                book_synopsis=book_synopsis,
+                chapter_digest=chapter_digest,
+            )
+        except Exception:
+            result = None
+        return result if result is not None else list(targets)

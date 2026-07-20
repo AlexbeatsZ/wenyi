@@ -26,7 +26,7 @@ from ..config import Config
 from ..glossary.extractor import GlossaryExtractor
 from ..glossary.store import GlossaryStore
 from ..llm.base import LLMClient
-from ..llm.factory import build_client
+from ..llm.factory import build_client, build_client_from_llm
 from ..llm.usage import merge_usage_summaries, usage_delta
 from ..ingest.segmenter import load_document, batch_segments
 from ..postprocess.punct import (
@@ -105,22 +105,52 @@ def _resume_batches(segments, max_chars: int) -> list[list]:
 class _BatchResult:
     targets: list[str]
     bt_samples: list[tuple[str, str]] = field(default_factory=list)
+    policy_fallback_indexes: list[int] = field(default_factory=list)
 
 
 class Orchestrator:
-    def __init__(self, config: Config, client: LLMClient | None = None):
+    def __init__(
+        self,
+        config: Config,
+        client: LLMClient | None = None,
+        translation_client: LLMClient | None = None,
+    ):
         """初始化共享 LLM 客户端、用量检查点和各流水线 Agent。"""
         self.config = config
         self.client = client or build_client(config)
-        # client 的统计是进程内累计；checkpoint 用于每次落盘时只提取新增部分。
-        self._usage_checkpoint = self.client.usage_summary()
+        self.translation_client = translation_client or (
+            build_client_from_llm(config.translation_llm)
+            if config.translation_llm is not None
+            else self.client
+        )
+        self._usage_clients = list({id(item): item for item in (
+            self.client,
+            self.translation_client,
+        )}.values())
+        # 各 client 的统计是进程内累计；checkpoint 用于每次落盘时只提取新增部分。
+        self._usage_checkpoint = self._current_usage_summary()
         self.analyzer = Analyzer(self.client, config)
         self.synopsizer = Synopsizer(self.client, config)
-        self.translator = Translator(self.client, config)
+        self.translator = Translator(self.translation_client, config)
         self.reviewer = Reviewer(self.client, config)
         self.backtrans = BackTranslator(self.client, config)
-        self.polisher = Polisher(self.client, config)
+        self.polisher = Polisher(
+            self.client,
+            config,
+            fallback_client=(
+                self.translation_client
+                if self.translation_client is not self.client
+                else None
+            ),
+        )
         self.extractor = GlossaryExtractor(self.client, config)
+
+    def _current_usage_summary(self) -> dict[str, Any]:
+        """合并主客户端与初译客户端的进程内用量。"""
+        current = self._usage_clients[0].usage_summary()
+        for client in self._usage_clients[1:]:
+            current = merge_usage_summaries(current, client.usage_summary())
+        return current
 
     def _punctuation_enabled(self) -> bool:
         """判断当前目标语言是否应启用中文标点规范化。"""
@@ -131,7 +161,7 @@ class Orchestrator:
 
     def _flush_usage(self, store: RunStore, *, scope: str) -> dict[str, Any]:
         """把当前 client 尚未落盘的用量增量合并到本书 usage.json。"""
-        current = self.client.usage_summary()
+        current = self._current_usage_summary()
         increment = usage_delta(current, self._usage_checkpoint)
         self._usage_checkpoint = current
         accumulated = store.load_usage() or {
@@ -862,6 +892,17 @@ class Orchestrator:
                 start_index=batch_start,
                 count=len(b),
                 polished=self.config.pipeline.polish,
+                initial_provider=(
+                    self.config.translation_llm.provider
+                    if self.config.translation_llm is not None
+                    else self.config.llm.provider
+                ),
+                refinement_provider=(
+                    self.config.llm.provider
+                    if self.config.pipeline.polish
+                    else None
+                ),
+                policy_fallback_indexes=res.policy_fallback_indexes,
                 punctuation_normalized=self._punctuation_enabled(),
                 backtranslate_sample_count=len(res.bt_samples),
                 segments=[
@@ -1307,10 +1348,22 @@ class Orchestrator:
             sources, glossary_terms=terms, style=style, context=ctx_text,
             book_synopsis=book_synopsis, chapter_digest=chapter_digest)
 
+        policy_fallback_indexes: list[int] = []
         if self.config.pipeline.polish:
-            polished = self.polisher.polish(targets, glossary_terms=terms, style=style)
+            polished = self.polisher.polish(
+                targets,
+                sources=sources,
+                glossary_terms=terms,
+                style=style,
+                context=ctx_text,
+                book_synopsis=book_synopsis,
+                chapter_digest=chapter_digest,
+            )
             if len(polished) == len(targets):
                 targets = polished
+            policy_fallback_indexes = list(
+                self.polisher.last_policy_fallback_indexes
+            )
 
         bt_samples: list[tuple[str, str]] = []
         rate = self.config.pipeline.backtranslate_sample
@@ -1319,7 +1372,11 @@ class Orchestrator:
                 if random.random() < rate:
                     bt_samples.append((s, t or ""))
 
-        return _BatchResult(targets=targets, bt_samples=bt_samples)
+        return _BatchResult(
+            targets=targets,
+            bt_samples=bt_samples,
+            policy_fallback_indexes=policy_fallback_indexes,
+        )
 
     # ── 可选步骤 / 连续全流程 ────────────────────────────────────────────────
     ALL_STEPS = ("translate", "review", "qa", "report", "assemble")

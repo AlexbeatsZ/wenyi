@@ -11,6 +11,10 @@ from .usage import UsageTracker
 Messages = list[dict[str, str]]
 
 
+class ContentPolicyError(RuntimeError):
+    """Provider 明确拒绝了包含敏感内容的请求。"""
+
+
 class LLMClient(ABC):
     """所有 provider 实现此接口。"""
 

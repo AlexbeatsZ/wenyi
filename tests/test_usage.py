@@ -475,6 +475,50 @@ class TestUsageIncrementalPersistence(unittest.TestCase):
             self.assertEqual(store.load_usage(), cumulative)
             self.assertTrue(os.path.isfile(store.usage_path))
 
+    def test_usage_combines_main_and_initial_translation_clients(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RunStore(os.path.join(directory, "state", "book"))
+            config = Config.from_dict(
+                {
+                    "llm": {"provider": "fake"},
+                    "translation_llm": {"provider": "fake"},
+                }
+            )
+            gemini = FakeClient()
+            deepseek = FakeClient()
+            orchestrator = Orchestrator(
+                config,
+                client=gemini,
+                translation_client=deepseek,
+            )
+            self._record(
+                gemini,
+                "strong",
+                prompt=30,
+                completion=10,
+                stage="Polisher",
+            )
+            self._record(
+                deepseek,
+                "strong",
+                prompt=50,
+                completion=20,
+                stage="Translator",
+            )
+
+            cumulative = orchestrator._flush_usage(store, scope="translate")
+
+            self.assertEqual(cumulative["totals"]["calls"], 2)
+            self.assertEqual(cumulative["totals"]["total_tokens"], 110)
+            self.assertEqual(
+                cumulative["by_stage"]["Translator"]["total_tokens"],
+                70,
+            )
+            self.assertEqual(
+                cumulative["by_stage"]["Polisher"]["total_tokens"],
+                40,
+            )
+
     def test_report_omits_usage_and_usage_file_keeps_book_total(self):
         with tempfile.TemporaryDirectory() as d:
             source = os.path.join(d, "novel.txt")

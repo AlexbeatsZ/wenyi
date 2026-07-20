@@ -79,7 +79,6 @@ class TestTranslatorAlignment(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "第 0 段失败"):
             translator.translate_batch(["あ"])
 
-
 class TestTranslatorPromptOrder(unittest.TestCase):
     def test_static_chapter_digest_precedes_dynamic_glossary(self):
         for template in (prompts.TRANSLATOR_USER, prompts.TRANSLATOR_FIX_USER):

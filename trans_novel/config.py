@@ -145,6 +145,7 @@ class Config(BaseModel):
     source_lang: str = "auto"        # auto | ja | en | …（auto 时由模型检测）
     target_lang: str = "zh"
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    translation_llm: LLMConfig | None = None
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
@@ -176,21 +177,12 @@ class Config(BaseModel):
     def from_dict(cls, raw: dict[str, Any]) -> "Config":
         """把 YAML 对应的嵌套字典转换为运行时配置模型。"""
         lang = raw.get("language", {})
-        llm_raw = raw.get("llm", {})
-        tiers = {
-            name: TierConfig.model_validate(t)
-            for name, t in (llm_raw.get("tiers", {}) or {}).items()
-        }
-        llm = LLMConfig(
-            provider=llm_raw.get("provider", "deepseek"),
-            base_url=llm_raw.get("base_url"),
-            api_key_env=llm_raw.get("api_key_env"),
-            command=llm_raw.get("command"),
-            cwd=llm_raw.get("cwd"),
-            reasoning_style=llm_raw.get("reasoning_style", "none"),
-            timeout=llm_raw.get("timeout", 600),
-            max_retries=llm_raw.get("max_retries", 4),
-            tiers=tiers,
+        llm = _parse_llm_config(raw.get("llm", {}) or {})
+        translation_raw = raw.get("translation_llm")
+        translation_llm = (
+            _parse_llm_config(translation_raw)
+            if isinstance(translation_raw, dict)
+            else None
         )
         segment = SegmentConfig.model_validate(raw.get("segment", {}) or {})
         pipeline = PipelineConfig.model_validate(raw.get("pipeline", {}) or {})
@@ -200,6 +192,7 @@ class Config(BaseModel):
             source_lang=lang.get("source", "auto"),
             target_lang=lang.get("target", "zh"),
             llm=llm,
+            translation_llm=translation_llm,
             segment=segment,
             pipeline=pipeline,
             output=output,
@@ -208,3 +201,22 @@ class Config(BaseModel):
             punctuation_quote_style=punct.get("quote_style", "source"),
             state_dir=raw.get("paths", {}).get("state_dir", "state"),
         )
+
+
+def _parse_llm_config(raw: dict[str, Any]) -> LLMConfig:
+    """解析主 LLM 或阶段专用 LLM，保持两者字段语义一致。"""
+    tiers = {
+        name: TierConfig.model_validate(t)
+        for name, t in (raw.get("tiers", {}) or {}).items()
+    }
+    return LLMConfig(
+        provider=raw.get("provider", "deepseek"),
+        base_url=raw.get("base_url"),
+        api_key_env=raw.get("api_key_env"),
+        command=raw.get("command"),
+        cwd=raw.get("cwd"),
+        reasoning_style=raw.get("reasoning_style", "none"),
+        timeout=raw.get("timeout", 600),
+        max_retries=raw.get("max_retries", 4),
+        tiers=tiers,
+    )

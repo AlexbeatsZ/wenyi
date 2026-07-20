@@ -46,6 +46,22 @@ def _config(state_dir: str):
 
 
 class TestOrchestrator(unittest.TestCase):
+    def test_stage_specific_clients_route_initial_translation_to_deepseek(self):
+        cfg = _config("state")
+        cfg.translation_llm = cfg.llm.model_copy()
+        gemini = FakeClient()
+        deepseek = FakeClient()
+
+        orch = Orchestrator(
+            cfg,
+            client=gemini,
+            translation_client=deepseek,
+        )
+
+        self.assertIs(orch.translator.client, deepseek)
+        self.assertIs(orch.polisher.client, gemini)
+        self.assertIs(orch.polisher.fallback_client, deepseek)
+
     def test_pipeline_restores_outer_dialogue_quotes_dropped_by_models(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = os.path.join(directory, "dialogue.txt")

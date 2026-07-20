@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import unittest
 
 from trans_novel.config import Config
 from trans_novel.ingest.models import Segment
+from trans_novel.llm.base import ContentPolicyError
 from trans_novel.llm.providers.fake import FakeClient
 from trans_novel.agents.reviewer import Reviewer, BackTranslator
 from trans_novel.agents.polisher import Polisher
@@ -67,9 +69,21 @@ class TestPolisher(unittest.TestCase):
         client = FakeClient(handler=lambda m, t, j: json.dumps(
             {"polished": ["润色甲", "润色乙"]}, ensure_ascii=False))
         p = Polisher(client, _cfg())
-        out = p.polish(["甲", "乙"])
+        out = p.polish(
+            ["甲", "乙"],
+            sources=["あ", "い"],
+            context="前文最终译文",
+            book_synopsis="全书概览",
+            chapter_digest="本章梗概",
+        )
         self.assertEqual(out, ["润色甲", "润色乙"])
         self.assertEqual(client.calls[-1]["tier"], "strong")
+        user = client.calls[-1]["messages"][-1]["content"]
+        self.assertIn("あ", user)
+        self.assertIn("甲", user)
+        self.assertIn("前文最终译文", user)
+        self.assertIn("全书概览", user)
+        self.assertIn("本章梗概", user)
 
     def test_polish_mismatch_keeps_original(self):
         client = FakeClient(handler=lambda m, t, j: json.dumps(
@@ -77,6 +91,32 @@ class TestPolisher(unittest.TestCase):
         p = Polisher(client, _cfg())
         out = p.polish(["甲", "乙"])
         self.assertEqual(out, ["甲", "乙"])  # 段数不符 → 保守保留原译
+
+    def test_policy_rejected_segment_uses_deepseek_fallback_only_for_it(self):
+        def gemini_handler(messages, tier, json_mode):
+            user = messages[-1]["content"]
+            count = len(re.findall(r"^\[(\d+)\]", user, re.M))
+            if count > 1 or "拒否対象" in user:
+                raise ContentPolicyError("policy rejected")
+            return json.dumps({"polished": ["Gemini精修"]}, ensure_ascii=False)
+
+        deepseek = FakeClient(
+            handler=lambda messages, tier, json_mode: json.dumps(
+                {"polished": ["DeepSeek兜底"]}, ensure_ascii=False
+            )
+        )
+        gemini = FakeClient(handler=gemini_handler)
+        polisher = Polisher(gemini, _cfg(), fallback_client=deepseek)
+
+        result = polisher.polish(["通常一", "拒否対象", "通常二"])
+
+        self.assertEqual(
+            result,
+            ["Gemini精修", "DeepSeek兜底", "Gemini精修"],
+        )
+        self.assertEqual(len(deepseek.calls), 1)
+        self.assertIn("拒否対象", deepseek.calls[0]["messages"][-1]["content"])
+        self.assertEqual(polisher.last_policy_fallback_indexes, [1])
 
 
 class TestBackTranslator(unittest.TestCase):

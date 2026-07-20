@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...config import LLMConfig, TierConfig
-from ..base import LLMClient, Messages
+from ..base import ContentPolicyError, LLMClient, Messages
 from ..tiers import resolve_tier
 from ..usage import UsageSample
 
@@ -110,6 +110,18 @@ def _is_tool_permission_denial(detail: str) -> bool:
     )
 
 
+def _is_content_policy_rejection(detail: str) -> bool:
+    """识别 agy/Gemini 以普通文本返回的内容策略拒绝。"""
+    lowered = detail.casefold()
+    return (
+        "prompt could not be submitted" in lowered
+        and (
+            "sensitive words" in lowered
+            or "prohibited use policy" in lowered
+        )
+    )
+
+
 class AgyClient(LLMClient):
     """每次以全新 ``agy --print`` 调用执行请求的 CLI provider。"""
 
@@ -197,6 +209,12 @@ class AgyClient(LLMClient):
                             stderr = _strip_ansi(result.stderr or "")
                             detail = stderr or stdout or "无错误输出"
                             if result.returncode == 0:
+                                if _is_content_policy_rejection(detail):
+                                    if response_attempt + 1 < _TEXT_RESPONSE_ATTEMPTS:
+                                        continue
+                                    raise ContentPolicyError(
+                                        "agy/Gemini 连续拒绝当前提示的内容策略检查"
+                                    )
                                 if _is_tool_permission_denial(detail):
                                     if response_attempt + 1 < _TEXT_RESPONSE_ATTEMPTS:
                                         continue

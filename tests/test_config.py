@@ -93,6 +93,33 @@ class TestConfigFileCreation(unittest.TestCase):
 
         self.assertEqual(cfg.llm.reasoning_style, "deepseek")
 
+    def test_translation_llm_is_loaded_independently(self):
+        cfg = Config.from_dict(
+            {
+                "llm": {"provider": "agy"},
+                "translation_llm": {
+                    "provider": "openai-compatible",
+                    "base_url": "https://token.sensenova.cn/v1",
+                    "api_key_env": "SENSENOVA_API_KEY",
+                    "reasoning_style": "deepseek",
+                    "tiers": {
+                        "strong": {
+                            "model": "deepseek-v4-flash",
+                            "options": {"thinking": True},
+                        }
+                    },
+                },
+            }
+        )
+
+        self.assertIsNotNone(cfg.translation_llm)
+        self.assertEqual(cfg.translation_llm.provider, "openai-compatible")
+        self.assertEqual(cfg.translation_llm.api_key_env, "SENSENOVA_API_KEY")
+        self.assertEqual(
+            cfg.translation_llm.tiers["strong"].model,
+            "deepseek-v4-flash",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

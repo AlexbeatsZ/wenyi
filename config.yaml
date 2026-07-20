@@ -23,6 +23,31 @@ llm:
     fast:
       model: Gemini 3.5 Flash (Low)
 
+# 正文初译专用：DeepSeek 快速直译；主 llm 的 Gemini 随后对照原文精修。
+# Gemini 内容策略拒绝某个精修段落时，也只用此客户端兜底该段。
+translation_llm:
+  provider: openai-compatible
+  base_url: https://token.sensenova.cn/v1
+  api_key_env: SENSENOVA_API_KEY
+  reasoning_style: deepseek
+  timeout: 600
+  max_retries: 4
+  tiers:
+    strong:
+      model: deepseek-v4-flash
+      options:
+        thinking: true
+        reasoning_effort: high
+    cheap:
+      model: deepseek-v4-flash
+      options:
+        thinking: true
+        reasoning_effort: high
+    fast:
+      model: deepseek-v4-flash
+      options:
+        thinking: false
+
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:
   # 一个翻译批次（句群）的目标大小，按字符粗略估算 token。

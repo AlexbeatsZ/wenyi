@@ -10,9 +10,9 @@ Read input
 -> Detect the source language or use the configured language
 -> Scan the book and create chapter digests and a whole-book synopsis
 -> Analyze representative passages and build an initial glossary and style guide
--> Translate chapter by chapter and batch by batch
+-> Create first drafts chapter by chapter and batch by batch
 -> Extract and update terminology as translation progresses
--> Optionally polish and normalize punctuation
+-> Optionally refine against the source and normalize punctuation
 -> Run the final whole-book review against the completed glossary
 -> Optionally run whole-book consistency QA
 -> Generate the report
@@ -34,7 +34,8 @@ The glossary constrains later translation and the final review, but it does not 
 ## Quality controls
 
 - **Segment alignment:** the model must return a JSON array with the same number of items as the input. Wenyi retries mismatched batches and falls back to translating one segment at a time.
-- **Polishing:** improves Chinese fluency while preserving meaning and segment count.
+- **Refinement:** an optional `translation_llm` can create the first draft, after which the main `llm` sees the source, draft, whole-book synopsis, chapter digest, relevant glossary, and recent finalized translation. Batches remain serial, so the next batch receives the previous batch's final text.
+- **Content-policy fallback:** an explicit rejection is retried and then localized per segment. Only a still-rejected segment is refined by `translation_llm`; other segments remain on the main model.
 - **Punctuation normalization:** normalizes Chinese sentence punctuation; quotes follow the source by default (preserving Japanese `「」『』`) or can be configured as mainland-style `“”‘’`.
 - **Final review:** starts only after every chapter has been translated, so each chapter derives its relevant term snapshot from the completed glossary rather than the glossary state from an earlier chapter. Chapters are divided into contiguous chunks and checked in parallel against fixed final translation and term snapshots; results are merged back in book order. Severe issues are only retranslated when `autofix_severe` is enabled.
 - **Whole-book consistency QA:** checks terminology, references, voice, and punctuation after translation. It reports issues by default without rewriting the text.

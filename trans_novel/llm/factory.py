@@ -2,41 +2,46 @@
 
 from __future__ import annotations
 
-from ..config import Config
+from ..config import Config, LLMConfig
 from .base import LLMClient
 
 
 def build_client(config: Config) -> LLMClient:
     """根据 llm.provider 延迟导入并构造对应客户端。"""
-    provider = config.llm.provider.strip().lower().replace("_", "-")
+    return build_client_from_llm(config.llm)
+
+
+def build_client_from_llm(llm: LLMConfig) -> LLMClient:
+    """根据一份主配置或阶段专用配置创建 provider。"""
+    provider = llm.provider.strip().lower().replace("_", "-")
     if provider == "deepseek":
         from .providers.deepseek import DeepSeekClient
 
-        return DeepSeekClient(config.llm)
+        return DeepSeekClient(llm)
     if provider == "openai":
         from .providers.openai import OpenAIClient
 
-        return OpenAIClient(config.llm)
+        return OpenAIClient(llm)
     if provider == "openrouter":
         from .providers.openrouter import OpenRouterClient
 
-        return OpenRouterClient(config.llm)
+        return OpenRouterClient(llm)
     if provider == "openai-compatible":
         from .providers.openai_compatible import OpenAICompatibleClient
 
-        return OpenAICompatibleClient(config.llm)
+        return OpenAICompatibleClient(llm)
     if provider == "ollama":
         from .providers.ollama import OllamaClient
 
-        return OllamaClient(config.llm)
+        return OllamaClient(llm)
     if provider == "vllm":
         from .providers.vllm import VLLMClient
 
-        return VLLMClient(config.llm)
+        return VLLMClient(llm)
     if provider in {"agy", "agy-cli"}:
         from .providers.agy import AgyClient
 
-        return AgyClient(config.llm)
+        return AgyClient(llm)
     if provider == "fake":
         from .providers.fake import FakeClient
 

@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from trans_novel.config import Config
+from trans_novel.llm.base import ContentPolicyError
 from trans_novel.llm.providers.agy import AgyClient, format_agy_prompt
 
 
@@ -200,6 +201,39 @@ class TestAgyClient(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess([], 0, denied, "")
 
         with self.assertRaisesRegex(RuntimeError, "误判为工具调用"):
+            AgyClient(_config().llm).complete(
+                [{"role": "user", "content": "翻译"}]
+            )
+
+        self.assertEqual(run.call_count, 3)
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_retries_content_policy_rejection_in_fresh_sessions(self, run):
+        rejected = (
+            "The prompt could not be submitted. The prompt contains sensitive "
+            "words that violate Google's Generative AI Prohibited Use policy."
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, rejected, ""),
+            subprocess.CompletedProcess([], 0, '{"translations":["译文"]}', ""),
+        ]
+
+        result = AgyClient(_config().llm).complete(
+            [{"role": "user", "content": "翻译"}], json_mode=True
+        )
+
+        self.assertEqual(result, '{"translations":["译文"]}')
+        self.assertEqual(run.call_count, 2)
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_raises_typed_error_after_persistent_policy_rejection(self, run):
+        rejected = (
+            "The prompt could not be submitted. The prompt contains sensitive "
+            "words that violate Google's Generative AI Prohibited Use policy."
+        )
+        run.return_value = subprocess.CompletedProcess([], 0, rejected, "")
+
+        with self.assertRaises(ContentPolicyError):
             AgyClient(_config().llm).complete(
                 [{"role": "user", "content": "翻译"}]
             )

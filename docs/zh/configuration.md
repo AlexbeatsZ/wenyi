@@ -30,6 +30,38 @@ llm:
 
 API Key 始终从环境变量读取，避免把密钥写进配置并提交到仓库。离线测试或调试可将 `provider` 改为 `fake`，此时不会发网络请求。
 
+### 分离初译与精修模型
+
+可用顶层 `translation_llm` 为正文初译配置独立 provider。`llm` 继续负责
+Gemini 精修、分析、术语等其它阶段；`translation_llm` 只负责正文初译，并在
+Gemini 明确触发内容策略拒绝时兜底对应的单个精修段落：
+
+```yaml
+llm:
+  provider: agy
+  command: agy
+  tiers:
+    strong:
+      model: Gemini 3.5 Flash (Medium)
+
+translation_llm:
+  provider: openai-compatible
+  base_url: https://token.sensenova.cn/v1
+  api_key_env: SENSENOVA_API_KEY
+  reasoning_style: deepseek
+  tiers:
+    strong:
+      model: deepseek-v4-flash
+      options:
+        thinking: true
+        reasoning_effort: high
+```
+
+启用 `pipeline.polish` 时，每批按顺序执行 DeepSeek 初译，再由主 `llm` 对照
+原文、初译、全书概览、本章梗概、相关术语和最近最终译文进行精修。未配置
+`translation_llm` 时，初译继续使用主 `llm`，与旧配置兼容。所有密钥仍只从
+环境变量读取。
+
 PDF 输入的首次解析另外读取 `MINERU_API_KEY`，用于调用 MinerU
 转换服务。该密钥与 LLM provider 配置无关，也不写入 `config.yaml`。
 
@@ -203,7 +235,7 @@ pipeline:
 
 - `review`：默认关闭；开启后在全书翻译完成时自动执行独立的最终审校阶段。关闭时仍可显式调用 `trans-novel review`。
 - `autofix_severe`：最终审校时自动重译并采纳通过校验的漏译、误译等严重问题。
-- `polish`：翻译后再调用强模型润色，质量可能提升，但显著增加耗时和成本。
+- `polish`：翻译后让强模型对照原文、初译和分层上下文进行精修，质量可能提升，但显著增加耗时和成本。
 - `backtranslate_sample`：回译抽检比例，`0` 为关闭。
 - `consistency_qa`：全书完成后进行跨章术语、人称、语气和标点检查。
 - `rolling_context_segments`：每批翻译附带的前文译文段数。

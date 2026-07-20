@@ -22,6 +22,8 @@
 - 即使使用 `--mode plan`，agy 1.1.4 仍可能偶发请求 `write_file` 并在 headless 模式自动拒绝；provider 必须明确要求纯文本回答、识别该拒绝文本并用全新会话有限重试，绝不能用 `--dangerously-skip-permissions` 绕过。
 - agy/Gemini 的内容策略拒绝会以退出码 0 的普通英文文本返回，而不是 JSON 或 CLI 错误；这与工具权限拒绝不同。第 129 章曾因完整提示中的高中生/年龄差恋爱背景与牵手段落组合触发 Google sensitive-words 过滤，批量与逐段兜底均失败。
 - Windows PID 会快速复用；后台任务是否仍运行应以 `trans-novel status` 的书级锁为准，再结合进程映像名和创建时间，不能只检查上次记录的 PID。
+- 正文可配置为两阶段串行：`translation_llm` 用 SenseNova DeepSeek 快速初译，主 `llm` 用 AGY Gemini 对照原文与分层上下文精修。完整上下文不等于整本正文；全书概览、本章梗概、相关术语、最近最终译文和当前原文/初译对照即可。
+- Gemini 内容策略拒绝应在 AGY 内用全新会话有限重试；持续拒绝时先逐段定位，只把仍被拒绝的精修段落交给 `translation_llm`，不能让整批静默换模型。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
 - 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
@@ -54,3 +56,5 @@
 - [x] agy unknown-model 兼容改为短 ID 有限重试后才回退旧显示名，并补回归测试。
 - [x] 核对上游 v0.3.3：`upstream/main` 与 `upstream/dev` 最新提交均已包含在 fork `main`；EPUB 拆章/源布局重建与自定义功能联合测试 109 项通过，无待合并提交。
 - [x] 修复 agy plan/headless 偶发误请求 `write_file` 导致第 128 章中止：禁止工具提示词并对自动拒绝启用 3 次干净会话重试。
+- [x] 新增 `translation_llm`：SenseNova `deepseek-v4-flash` 负责正文初译，AGY Gemini Flash Medium 对照原文、初译和分层上下文串行精修；密钥继续读取 `SENSENOVA_API_KEY`。
+- [x] 新增 Gemini 内容策略拒绝的 3 次干净会话重试与逐段 DeepSeek 回退；真实验证第 129 章故障段可成功完成两阶段处理。
