@@ -124,6 +124,37 @@ class Translator(Agent):
             translated.extend(result)
         return translated
 
+    def _translate_stripped_partition(
+        self,
+        sources: list[str],
+        glossary_terms: list[GlossaryTerm],
+        *,
+        offset: int,
+    ) -> list[str]:
+        """Recover alignment after context stripping without restoring spoilers."""
+        try:
+            result = self._call_batch(
+                sources, glossary_terms, "", "", "", "",
+            )
+        except Exception:
+            if len(sources) == 1:
+                raise
+            midpoint = len(sources) // 2
+            return (
+                self._translate_stripped_partition(
+                    sources[:midpoint], glossary_terms, offset=offset,
+                )
+                + self._translate_stripped_partition(
+                    sources[midpoint:],
+                    glossary_terms,
+                    offset=offset + midpoint,
+                )
+            )
+        self.last_policy_context_fallback_indexes.extend(
+            range(offset, offset + len(sources))
+        )
+        return result
+
     def retranslate_with_feedback(
         self,
         source: str,
@@ -225,7 +256,15 @@ class Translator(Agent):
                         "策略拒绝定位后的最小批次仍翻译失败"
                     ) from error
             except Exception as error:
-                raise AlignmentError("无未来上下文的批次仍翻译失败") from error
+                try:
+                    self.last_policy_context_fallback_indexes = []
+                    return self._translate_stripped_partition(
+                        sources, glossary_terms, offset=0,
+                    )
+                except Exception as partition_error:
+                    raise AlignmentError(
+                        "无未来上下文的批次仍翻译失败"
+                    ) from partition_error
 
         # 兜底：逐段翻译。任一段仍失败时显式中断，保留已落盘
         # 批次供续跑；不能用空字符串占位，否则章节会被错误标记为已完成。

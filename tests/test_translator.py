@@ -168,6 +168,33 @@ class TestTranslatorAlignment(unittest.TestCase):
         )
         self.assertEqual(len(client.calls), 2)
 
+    def test_stripped_context_alignment_mismatch_is_bisected(self):
+        sources = [f"普通段{i}" for i in range(6)]
+
+        def handler(messages, tier, json_mode):
+            user = messages[-1]["content"]
+            numbered = re.findall(r"^\[\d+\]\s*(.*)$", user, re.M)
+            if "后文身份反转" in user:
+                raise ContentPolicyError("policy rejected combined context")
+            translated = [f"译：{source}" for source in numbered]
+            if len(translated) > 3:
+                translated.pop()
+            return json.dumps({"translations": translated}, ensure_ascii=False)
+
+        client = FakeClient(handler=handler)
+        translator = Translator(client, self._config())
+
+        result = translator.translate_batch(
+            sources,
+            book_synopsis="后文身份反转",
+        )
+
+        self.assertEqual(result, [f"译：{source}" for source in sources])
+        self.assertEqual(
+            translator.last_policy_context_fallback_indexes,
+            list(range(len(sources))),
+        )
+
 class TestTranslatorPromptOrder(unittest.TestCase):
     def test_static_chapter_digest_precedes_dynamic_glossary(self):
         for template in (prompts.TRANSLATOR_USER, prompts.TRANSLATOR_FIX_USER):
