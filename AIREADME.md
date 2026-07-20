@@ -24,6 +24,7 @@
 - Windows PID 会快速复用；后台任务是否仍运行应以 `trans-novel status` 的书级锁为准，再结合进程映像名和创建时间，不能只检查上次记录的 PID。
 - 正文可配置为两阶段串行：`translation_llm` 用 SenseNova DeepSeek 快速初译，主 `llm` 用 AGY Gemini 对照原文与分层上下文精修。完整上下文不等于整本正文；全书概览、本章梗概、相关术语、最近最终译文和当前原文/初译对照即可。
 - Gemini 内容策略拒绝应在 AGY 内用全新会话有限重试；持续拒绝时先逐段定位，只把仍被拒绝的精修段落交给 `translation_llm`，不能让整批静默换模型。
+- AGY 在 Windows 上通过命令行参数接收提示词；标题翻译即使已按 40 项/4000 字分批，若每批仍注入上千条全量术语，也会触发 `CreateProcess` 的 `WinError 206`。标题批次只能注入当前标题实际命中的术语，provider 也应把 206 报为命令行过长而非误报 CLI 缺失。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
 - 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
@@ -32,7 +33,7 @@
 - [x] 检查项目配置、CLI 文档、源 EPUB 和 Git 状态。
 - [x] 验证 SenseNova 端点、模型 ID、JSON 模式及 DeepSeek 思考参数。
 - [x] 完成 `prepare`，保留项目自动生成的风格指南。
-- [ ] 后台自动翻译整本 EPUB；2026-07-21 01:05 已用两阶段方案恢复，书级状态为翻译中，当前错误日志为空；第 128 章已完整落盘。
+- [ ] 137 个正文逻辑章节均已翻译完成；当前待完成章节/目录标题翻译与 EPUB 组装。上次在标题进度 0/233 因全量术语导致 AGY Windows 命令行过长而中止。
 - [ ] 翻译完成后检查 `output` 目录中的中文 EPUB；可用 `trans-novel status` 随时查看进度，同一命令可断点续跑。
 - [x] 新增 `reader` 局域网移动阅读器：暗色排版、每分钟自动查询、手动查询、章节导航、字号调节和原文对照开关。
 - [x] 阅读器通过 3 项自动测试及 390×844 手机视口交互检查；不会干扰后台翻译。
@@ -58,3 +59,5 @@
 - [x] 修复 agy plan/headless 偶发误请求 `write_file` 导致第 128 章中止：禁止工具提示词并对自动拒绝启用 3 次干净会话重试。
 - [x] 新增 `translation_llm`：SenseNova `deepseek-v4-flash` 负责正文初译，AGY Gemini Flash Medium 对照原文、初译和分层上下文串行精修；密钥继续读取 `SENSENOVA_API_KEY`。
 - [x] 新增 Gemini 内容策略拒绝的 3 次干净会话重试与逐段 DeepSeek 回退；真实验证第 129 章故障段可成功完成两阶段处理。
+- [x] 修复标题翻译 `WinError 206`：每批只注入标题命中的术语，并纠正 AGY 对 Windows 命令行过长的错误提示。
+- [x] `trans-novel status` 将运行状态移动到章节表格和术语统计之后，便于直接查看最后一行。

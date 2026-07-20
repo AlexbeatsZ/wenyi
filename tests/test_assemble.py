@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 import zipfile
@@ -24,7 +25,7 @@ from trans_novel.assemble.writer import (
 )
 from trans_novel.assemble.about import append_about_page
 from trans_novel.assemble.report import build_report
-from trans_novel.glossary.store import GlossaryStore
+from trans_novel.glossary.store import GlossaryStore, GlossaryTerm
 from trans_novel.ingest.segmenter import load_document
 from trans_novel.ingest.epub_reader import annotate_epub_resource
 from trans_novel.ingest.models import Chapter
@@ -465,6 +466,60 @@ class TestAssembleEpub(unittest.TestCase):
 
 
 class TestTitleTranslation(unittest.TestCase):
+    def test_title_prompt_only_includes_terms_relevant_to_current_batch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, "novel.epub")
+            write_sample_epub(source)
+            document = load_document(source, "ja", "zh")
+            store = RunStore(os.path.join(directory, "state"))
+            manifest = store.stage_document(document)
+            manifest["meta"]["toc_entries"] = [
+                {
+                    "entry_id": "nav.xhtml:0",
+                    "toc_path": "nav.xhtml",
+                    "node_index": 0,
+                    "title": "対象タイトル",
+                }
+            ]
+            store.save_manifest(manifest)
+            client = FakeClient()
+            orchestrator = Orchestrator(_config(directory), client=client)
+            glossary = GlossaryStore(store.glossary_path)
+            unrelated = [
+                GlossaryTerm(
+                    source=f"無関係用語{i:04d}",
+                    target=f"无关术语{i:04d}",
+                    note="x" * 40,
+                )
+                for i in range(1000)
+            ]
+            relevant = GlossaryTerm(source="対象", target="对象")
+            captured_prompts: list[str] = []
+
+            def complete_json(messages, **kwargs):
+                prompt = "\n".join(message["content"] for message in messages)
+                captured_prompts.append(prompt)
+                count = len(re.findall(r"^\[(\d+)\]", messages[-1]["content"], re.M))
+                return {"titles": [f"标题{i}" for i in range(count)]}
+
+            try:
+                with (
+                    patch.object(
+                        glossary,
+                        "all_terms",
+                        return_value=[*unrelated, relevant],
+                    ),
+                    patch.object(client, "complete_json", side_effect=complete_json),
+                ):
+                    orchestrator._translate_titles(store, glossary)
+            finally:
+                glossary.close()
+
+            self.assertTrue(captured_prompts)
+            self.assertTrue(all(len(prompt) < 10000 for prompt in captured_prompts))
+            self.assertTrue(any("対象 → 对象" in prompt for prompt in captured_prompts))
+            self.assertTrue(all("無関係用語0000" not in prompt for prompt in captured_prompts))
+
     def test_invalid_title_count_stops_instead_of_saving_partial_toc(self):
         with tempfile.TemporaryDirectory() as directory:
             source = os.path.join(directory, "novel.epub")

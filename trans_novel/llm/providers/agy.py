@@ -240,6 +240,11 @@ class AgyClient(LLMClient):
                     if completed:
                         break
         except FileNotFoundError as exc:
+            if getattr(exc, "winerror", None) == 206:
+                raise RuntimeError(
+                    "agy 提示词导致 Windows 命令行过长；"
+                    "请缩小当前批次或减少注入上下文"
+                ) from exc
             raise RuntimeError(
                 f"找不到 agy CLI：{self.command!r}；请先安装并确认其位于 PATH"
             ) from exc

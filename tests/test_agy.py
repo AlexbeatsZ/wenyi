@@ -89,6 +89,17 @@ class TestAgyClient(unittest.TestCase):
                 [{"role": "user", "content": "x"}]
             )
 
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_windows_command_line_too_long_is_not_reported_as_missing_cli(self, run):
+        error = FileNotFoundError("command line too long")
+        error.winerror = 206
+        run.side_effect = error
+
+        with self.assertRaisesRegex(RuntimeError, "Windows 命令行过长"):
+            AgyClient(_config().llm).complete(
+                [{"role": "user", "content": "x"}]
+            )
+
     def test_factory_accepts_both_provider_names(self):
         from trans_novel.llm.factory import build_client
 

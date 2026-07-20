@@ -411,6 +411,8 @@ class TestCliConfig(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("运行状态：翻译中", result.output)
+        lines = [line.strip() for line in result.output.splitlines() if line.strip()]
+        self.assertIn("运行状态：翻译中", lines[-1])
 
 
 class TestWindowsConsoleEncoding(unittest.TestCase):

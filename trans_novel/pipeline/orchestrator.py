@@ -741,9 +741,13 @@ class Orchestrator:
             batches.append(current)
 
         completed = 0
-        glossary_text = prompts.render_glossary(glossary.all_terms())
+        all_terms = glossary.all_terms()
         for batch_index, batch in enumerate(batches):
             titles = [str(item["source"]) for item in batch]
+            # 标题只需要实际命中的专名。全量术语库可达数千项，而 agy 通过
+            # Windows argv 传递提示词；全量注入会超过 CreateProcess 长度限制。
+            title_terms = GlossaryStore.terms_in(all_terms, "\n".join(titles))
+            glossary_text = prompts.render_glossary(title_terms)
             system = prompts.render(
                 "title_translator_system",
                 src=self.config.source_lang,

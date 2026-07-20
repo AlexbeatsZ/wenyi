@@ -531,11 +531,11 @@ def status(
         chapter["status"] != STATUS_DONE for chapter in m["chapters"]
     )
     if busy and has_pending_translation:
-        console.print("[bold green]运行状态：翻译中[/]")
+        status_line = "[bold green]运行状态：翻译中[/]"
     elif busy:
-        console.print("[bold cyan]运行状态：处理中[/]（审校、报告或导出）")
+        status_line = "[bold cyan]运行状态：处理中[/]（审校、报告或导出）"
     else:
-        console.print("[yellow]运行状态：空闲[/]")
+        status_line = "[yellow]运行状态：空闲[/]"
     table = Table("", "#", "章节", "翻译", "审校")
     for c in m["chapters"]:
         mark = "✓" if c["status"] == STATUS_DONE else "·"
@@ -550,6 +550,7 @@ def status(
     g = GlossaryStore(store.glossary_path)
     console.print("术语库：", g.stats())
     g.close()
+    console.print(status_line)
 
 
 @glossary_app.command("list")
