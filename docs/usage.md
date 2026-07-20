@@ -73,6 +73,12 @@ uv run trans-novel translate book.epub
 uv run trans-novel status book.epub
 ```
 
+Before the chapter table, `status` now reports live activity. It shows
+`Translating` when the per-book run lock is held and untranslated chapters
+remain, `Processing` for review/report/export work after translation, and
+`Idle` when no process holds the lock. This checks the real lock rather than
+the mere presence of a stale `.run.lock` file.
+
 Changing polishing settings does not automatically rerun translation batches that are already complete. Final review has its own persisted state and can be repeated independently with `review --force`; use a new state directory or remove the corresponding state only when you intentionally want a fresh translation.
 
 ### Repairing quote style in existing state

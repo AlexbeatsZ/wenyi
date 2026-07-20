@@ -526,6 +526,16 @@ def status(
     console.print(
         f"《{m['title']}》（{m['fmt']}）  {m['source_lang']}→{m['target_lang']}"
     )
+    busy = store.is_busy()
+    has_pending_translation = any(
+        chapter["status"] != STATUS_DONE for chapter in m["chapters"]
+    )
+    if busy and has_pending_translation:
+        console.print("[bold green]运行状态：翻译中[/]")
+    elif busy:
+        console.print("[bold cyan]运行状态：处理中[/]（审校、报告或导出）")
+    else:
+        console.print("[yellow]运行状态：空闲[/]")
     table = Table("", "#", "章节", "翻译", "审校")
     for c in m["chapters"]:
         mark = "✓" if c["status"] == STATUS_DONE else "·"

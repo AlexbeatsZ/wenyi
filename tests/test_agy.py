@@ -116,6 +116,12 @@ class TestAgyClient(unittest.TestCase):
                 "",
                 "model gemini-3.5-flash-high is not recognized as a known model",
             ),
+            subprocess.CompletedProcess(
+                [],
+                1,
+                "",
+                "model gemini-3.5-flash-high is not recognized as a known model",
+            ),
             subprocess.CompletedProcess([], 0, "ok", ""),
         ]
         cfg = _config(tiers={"strong": {"model": "Gemini 3.5 Flash (High)"}})
@@ -123,15 +129,42 @@ class TestAgyClient(unittest.TestCase):
         result = AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
 
         self.assertEqual(result, "ok")
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 3)
         self.assertEqual(
             run.call_args_list[0].args[0][1:3],
             ["--model", "gemini-3.5-flash-high"],
         )
         self.assertEqual(
             run.call_args_list[1].args[0][1:3],
+            ["--model", "gemini-3.5-flash-high"],
+        )
+        self.assertEqual(
+            run.call_args_list[2].args[0][1:3],
             ["--model", "Gemini 3.5 Flash (High)"],
         )
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_retries_short_id_before_legacy_fallback(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess(
+                [],
+                1,
+                "",
+                "model gemini-3.5-flash-medium is not recognized as a known model",
+            ),
+            subprocess.CompletedProcess([], 0, "ok", ""),
+        ]
+        cfg = _config(tiers={"strong": {"model": "Gemini 3.5 Flash (Medium)"}})
+
+        result = AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            self.assertEqual(
+                call.args[0][1:3],
+                ["--model", "gemini-3.5-flash-medium"],
+            )
 
 
 if __name__ == "__main__":

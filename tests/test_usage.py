@@ -509,6 +509,17 @@ class TestUsageIncrementalPersistence(unittest.TestCase):
 
 
 class TestRunStoreLock(unittest.TestCase):
+    def test_busy_state_tracks_the_actual_cross_process_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = os.path.join(directory, "state", "book")
+            first = RunStore(run_dir)
+            observer = RunStore(run_dir)
+
+            self.assertFalse(observer.is_busy())
+            with first.lock():
+                self.assertTrue(observer.is_busy())
+            self.assertFalse(observer.is_busy())
+
     def test_second_store_waits_for_first_store_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = os.path.join(directory, "state", "book")

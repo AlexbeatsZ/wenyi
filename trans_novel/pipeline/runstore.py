@@ -79,6 +79,39 @@ class RunStore:
                 finally:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
+    def is_busy(self) -> bool:
+        """不阻塞地判断是否有另一个进程持有本书运行锁。"""
+        lock_path = os.path.join(self.run_dir, ".run.lock")
+        try:
+            lock_file = open(lock_path, "r+b")
+        except FileNotFoundError:
+            return False
+
+        with lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                return False
+            lock_file.seek(0)
+            if os.name == "nt":  # pragma: no cover - Windows-specific
+                import msvcrt
+
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError:
+                    return True
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                return False
+
+            import fcntl
+
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            return False
+
     # ── 路径 ──────────────────────────────────────────────────────────────
     @property
     def manifest_path(self) -> str:

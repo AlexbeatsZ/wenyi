@@ -170,8 +170,9 @@ provider are character-based estimates rather than billable token counts.
 For compatibility with OpenClaw configurations, the short IDs
 `gemini-3.1-pro[-low|-high]` and
 `gemini-3.5-flash[-low|-medium|-high]` are sent as short IDs for agy 1.1. Wenyi
-falls back to agy 1.0 display names only after an explicit unknown-model error,
-then caches the successful form.
+retries the short ID once after an explicit unknown-model error before falling
+back to agy 1.0 display names, then caches the successful form. This tolerates
+the brief model-registry race observed during agy 1.1 startup.
 
 `cwd` may be set to choose the workspace visible to agy. Plan mode is not an
 operating-system security boundary; use an OS sandbox or container when

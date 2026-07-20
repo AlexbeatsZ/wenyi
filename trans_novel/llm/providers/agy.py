@@ -33,6 +33,7 @@ _MODEL_ALIASES = {
 _DISPLAY_NAME_TO_MODEL = {
     display.casefold(): model for model, display in _MODEL_DISPLAY_NAMES.items()
 }
+_SHORT_ID_ATTEMPTS = 2
 _ROLE_LABELS = {
     "system": "System",
     "user": "User",
@@ -136,37 +137,53 @@ class AgyClient(LLMClient):
         )
         try:
             with self._process_lock:
+                completed = False
                 for index, candidate in enumerate(candidates):
-                    args = [
-                        self.command,
-                        "--model",
-                        candidate,
-                        "--mode",
-                        "plan",
-                        "--print-timeout",
-                        f"{self.timeout}s",
-                        "--print",
-                        prompt,
-                    ]
-                    result = subprocess.run(
-                        args,
-                        cwd=self.cwd,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=self.timeout + 5,
-                        check=False,
+                    attempts = (
+                        _SHORT_ID_ATTEMPTS
+                        if candidate in _MODEL_DISPLAY_NAMES
+                        else 1
                     )
-                    stdout = _strip_ansi(result.stdout or "")
-                    stderr = _strip_ansi(result.stderr or "")
-                    detail = stderr or stdout or "无错误输出"
-                    has_fallback = index + 1 < len(candidates)
-                    if result.returncode == 0:
-                        self._resolved_models[model_key] = candidate
+                    for attempt in range(attempts):
+                        args = [
+                            self.command,
+                            "--model",
+                            candidate,
+                            "--mode",
+                            "plan",
+                            "--print-timeout",
+                            f"{self.timeout}s",
+                            "--print",
+                            prompt,
+                        ]
+                        result = subprocess.run(
+                            args,
+                            cwd=self.cwd,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=self.timeout + 5,
+                            check=False,
+                        )
+                        stdout = _strip_ansi(result.stdout or "")
+                        stderr = _strip_ansi(result.stderr or "")
+                        detail = stderr or stdout or "无错误输出"
+                        if result.returncode == 0:
+                            self._resolved_models[model_key] = candidate
+                            completed = True
+                            break
+                        unknown_model = _is_unknown_model_error(detail)
+                        if unknown_model and attempt + 1 < attempts:
+                            continue
+                        has_fallback = index + 1 < len(candidates)
+                        if unknown_model and has_fallback:
+                            break
+                        raise RuntimeError(
+                            f"agy CLI 退出码 {result.returncode}：{detail}"
+                        )
+                    if completed:
                         break
-                    if not (has_fallback and _is_unknown_model_error(detail)):
-                        raise RuntimeError(f"agy CLI 退出码 {result.returncode}：{detail}")
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"找不到 agy CLI：{self.command!r}；请先安装并确认其位于 PATH"

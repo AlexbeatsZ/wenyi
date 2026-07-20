@@ -379,6 +379,39 @@ class TestCliConfig(unittest.TestCase):
             self.assertIn("尚无进度", result.output)
             self.assertFalse(os.path.exists(state_dir))
 
+    def test_status_reports_translation_activity_from_run_lock(self):
+        cfg = Config.from_dict({"llm": {"provider": "fake"}})
+        manifest = {
+            "title": "测试书",
+            "fmt": "txt",
+            "source_lang": "ja",
+            "target_lang": "zh",
+            "chapters": [
+                {
+                    "index": 0,
+                    "title": "第一章",
+                    "status": "pending",
+                    "review_status": "pending",
+                }
+            ],
+        }
+        store = unittest.mock.Mock()
+        store.exists.return_value = True
+        store.is_busy.return_value = True
+        store.load_manifest.return_value = manifest
+        store.glossary_path = "glossary.db"
+
+        with (
+            patch("trans_novel.cli._load_config", return_value=cfg),
+            patch("trans_novel.cli._runstore_for", return_value=store),
+            patch("trans_novel.glossary.store.GlossaryStore") as glossary,
+        ):
+            glossary.return_value.stats.return_value = {}
+            result = CliRunner().invoke(app, ["status", "novel.txt"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("运行状态：翻译中", result.output)
+
 
 class TestWindowsConsoleEncoding(unittest.TestCase):
     class _Stream:
