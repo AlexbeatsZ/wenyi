@@ -34,12 +34,19 @@ _DISPLAY_NAME_TO_MODEL = {
     display.casefold(): model for model, display in _MODEL_DISPLAY_NAMES.items()
 }
 _SHORT_ID_ATTEMPTS = 2
+_TEXT_RESPONSE_ATTEMPTS = 3
 _ROLE_LABELS = {
     "system": "System",
     "user": "User",
     "assistant": "Assistant",
     "tool": "Tool result",
 }
+_TEXT_ONLY_REQUIREMENT = (
+    "Execution constraint:\n"
+    "This is a self-contained text task. Answer directly from the prompt. "
+    "Do not call any tools, inspect files, browse, run commands, or use "
+    "write_file. Return the answer only in the response text."
+)
 _JSON_REQUIREMENT = (
     "Output requirement:\n"
     "Return only one valid JSON value matching the requested schema. "
@@ -53,7 +60,7 @@ def format_agy_prompt(messages: Messages, *, json_mode: bool = False) -> str:
     agy 1.0.x 没有单次 system prompt 参数，因此 ``System`` 只是明确标注的
     普通提示词前缀，不冒充原生 system 消息。
     """
-    sections: list[str] = []
+    sections: list[str] = [_TEXT_ONLY_REQUIREMENT]
     for message in messages:
         content = str(message.get("content", "")).strip()
         if not content:
@@ -91,6 +98,16 @@ def _is_unknown_model_error(detail: str) -> bool:
     """只对 agy 明确报告的模型名不识别错误启用兼容回退。"""
     lowered = detail.casefold()
     return "model" in lowered and "not recognized as a known model" in lowered
+
+
+def _is_tool_permission_denial(detail: str) -> bool:
+    """识别 agy headless 会话把文本任务误转成工具调用后的自动拒绝。"""
+    lowered = detail.casefold()
+    return (
+        "tool required" in lowered
+        and "permission" in lowered
+        and ("auto-denied" in lowered or "headless mode" in lowered)
+    )
 
 
 class AgyClient(LLMClient):
@@ -145,35 +162,55 @@ class AgyClient(LLMClient):
                         else 1
                     )
                     for attempt in range(attempts):
-                        args = [
-                            self.command,
-                            "--model",
-                            candidate,
-                            "--mode",
-                            "plan",
-                            "--print-timeout",
-                            f"{self.timeout}s",
-                            "--print",
-                            prompt,
-                        ]
-                        result = subprocess.run(
-                            args,
-                            cwd=self.cwd,
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
-                            timeout=self.timeout + 5,
-                            check=False,
-                        )
-                        stdout = _strip_ansi(result.stdout or "")
-                        stderr = _strip_ansi(result.stderr or "")
-                        detail = stderr or stdout or "无错误输出"
-                        if result.returncode == 0:
-                            self._resolved_models[model_key] = candidate
-                            completed = True
+                        unknown_model = False
+                        for response_attempt in range(_TEXT_RESPONSE_ATTEMPTS):
+                            retry_note = ""
+                            if response_attempt:
+                                retry_note = (
+                                    "\n\nCritical retry instruction: Your previous "
+                                    "attempt incorrectly requested a tool. Do not use "
+                                    "tools. Produce the requested response as plain "
+                                    "response text now."
+                                )
+                            args = [
+                                self.command,
+                                "--model",
+                                candidate,
+                                "--mode",
+                                "plan",
+                                "--print-timeout",
+                                f"{self.timeout}s",
+                                "--print",
+                                prompt + retry_note,
+                            ]
+                            result = subprocess.run(
+                                args,
+                                cwd=self.cwd,
+                                capture_output=True,
+                                text=True,
+                                encoding="utf-8",
+                                errors="replace",
+                                timeout=self.timeout + 5,
+                                check=False,
+                            )
+                            stdout = _strip_ansi(result.stdout or "")
+                            stderr = _strip_ansi(result.stderr or "")
+                            detail = stderr or stdout or "无错误输出"
+                            if result.returncode == 0:
+                                if _is_tool_permission_denial(detail):
+                                    if response_attempt + 1 < _TEXT_RESPONSE_ATTEMPTS:
+                                        continue
+                                    raise RuntimeError(
+                                        "agy CLI 连续把纯文本任务误判为工具调用；"
+                                        "已拒绝授权并停止"
+                                    )
+                                self._resolved_models[model_key] = candidate
+                                completed = True
+                                break
+                            unknown_model = _is_unknown_model_error(detail)
                             break
-                        unknown_model = _is_unknown_model_error(detail)
+                        if completed:
+                            break
                         if unknown_model and attempt + 1 < attempts:
                             continue
                         has_fallback = index + 1 < len(candidates)

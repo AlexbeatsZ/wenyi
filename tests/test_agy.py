@@ -34,6 +34,10 @@ class TestAgyPrompt(unittest.TestCase):
         )
         self.assertEqual(
             prompt,
+            "Execution constraint:\n"
+            "This is a self-contained text task. Answer directly from the prompt. "
+            "Do not call any tools, inspect files, browse, run commands, or use "
+            "write_file. Return the answer only in the response text.\n\n"
             "System:\n翻译成简体中文。\n\nUser:\nこんにちは",
         )
 
@@ -165,6 +169,42 @@ class TestAgyClient(unittest.TestCase):
                 call.args[0][1:3],
                 ["--model", "gemini-3.5-flash-medium"],
             )
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_retries_headless_tool_permission_denial(self, run):
+        denied = (
+            'jetski: no output produced — a tool required the "write_file" '
+            "permission that headless mode cannot prompt for, so it was auto-denied"
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, denied, ""),
+            subprocess.CompletedProcess([], 0, '{"translations":["你好"]}', ""),
+        ]
+        client = AgyClient(_config().llm)
+
+        result = client.complete(
+            [{"role": "user", "content": "翻译こんにちは"}], json_mode=True
+        )
+
+        self.assertEqual(result, '{"translations":["你好"]}')
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("Do not call any tools", run.call_args_list[0].args[0][-1])
+        self.assertIn("Critical retry instruction", run.call_args.args[0][-1])
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_rejects_persistent_tool_permission_denial(self, run):
+        denied = (
+            'a tool required the "write_file" permission that headless mode '
+            "cannot prompt for, so it was auto-denied"
+        )
+        run.return_value = subprocess.CompletedProcess([], 0, denied, "")
+
+        with self.assertRaisesRegex(RuntimeError, "误判为工具调用"):
+            AgyClient(_config().llm).complete(
+                [{"role": "user", "content": "翻译"}]
+            )
+
+        self.assertEqual(run.call_count, 3)
 
 
 if __name__ == "__main__":
