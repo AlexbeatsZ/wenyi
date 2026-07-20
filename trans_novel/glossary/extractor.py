@@ -8,7 +8,20 @@ from __future__ import annotations
 
 from ..agents import prompts
 from ..agents.base import Agent
-from .store import GlossaryStore, GlossaryTerm
+from .store import (
+    GlossaryStore,
+    GlossaryTerm,
+    TYPE_FIXED_EXPR,
+    TYPE_HONORIFIC,
+    TYPE_SPEECH,
+)
+
+
+_CONTEXTUAL_TYPES = {
+    TYPE_HONORIFIC,
+    TYPE_SPEECH,
+    TYPE_FIXED_EXPR,
+}
 
 
 def _text(value: object, default: str = "") -> str:
@@ -58,7 +71,12 @@ class GlossaryExtractor(Agent):
         terms = self.extract(source_text, target_text, existing)
         summary = {"inserted": 0, "conflict": 0, "unchanged": 0}
         for t in terms:
+            # These are local phrasing/context, not stable book-wide entities.
+            # A true appellation with an independent translation remains
+            # supported; verified aliases are deduplicated by the store.
+            if t.type in _CONTEXTUAL_TYPES:
+                continue
             t.first_chapter = chapter
-            result = store.upsert_term(t, chapter=chapter)
+            result = store.upsert_extracted_term(t, chapter=chapter)
             summary[result] = summary.get(result, 0) + 1
         return summary

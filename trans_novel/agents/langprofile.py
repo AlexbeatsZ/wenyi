@@ -35,8 +35,11 @@ def translate_guidance(src: str, honorific_strategy: str = "keep_style") -> str:
     if src == "ja":
         return (
             "- 敬称：" + honorific_rule(honorific_strategy) + "\n"
-            "- 依据【角色信息】与第一人称（私/僕/俺/あたし 等）体现的语域，正确选择"
-            "“他/她”等代词与说话口吻。\n"
+            "- 第一人称（私/僕/俺/あたし 等）、语气、姓名印象、外貌和服装只能说明语域或人物呈现，"
+            "不能单独证明性别。只有当前原文明示或对照表标明已确认性别时才使用“他/她”；"
+            "否则优先重复姓名/称谓、自然省略主语或采用不暴露性别的表达。\n"
+            "- 即使【全书概览】含后文真相，也必须保留当前章节的伪装、误认、悬念和限知视角，"
+            "不得提前用性别代词泄露反转。\n"
             "- 拟声拟态词按中文小说习惯自然表达，不生硬直译。\n"
             "- 汉字词不等于中文词，按语义译，勿照搬日文汉字写法。"
         )
@@ -53,7 +56,10 @@ def translate_guidance(src: str, honorific_strategy: str = "keep_style") -> str:
 def term_guidance(src: str) -> str:
     """分析/术语抽取用：reading 字段与性别判断的语言相关说明。"""
     if src == "ja":
-        return "reading 填假名读音（用于音译消歧）；人物依语气/第一人称判断性别。"
+        return (
+            "reading 填假名读音（用于音译消歧）；人物性别须区分证据强弱："
+            "原文明示身份可确认，语气、姓名、外貌、服装及第一人称只能作为弱证据。"
+        )
     if src == "en":
         return "reading 可留空（英文无需读音）；人物依姓名常识与上下文判断性别。"
     return "reading 可留空；人物依上下文判断性别。"

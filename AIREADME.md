@@ -38,6 +38,9 @@
 - EPUB ruby 的 `<rt>` 是注音，`<rp>` 是不支持 ruby 时显示的备用括号；两者都不能进入可翻译 source。旧实现只跳过 `rt`，使本书 270 个 source 段出现 `伸枝（）/躍起（）` 等污染，当前状态无法靠继续 reviewer 修复，必须重新 ingest。
 - 多模型共识也不是事实：相同 67 段样本中 Claude Sonnet 4.6 与 Gemini Pro High 各报 19 项、重合 13 项，但两者都曾在缺少 canonical facts 时把女性尾关误推为男性。模型结论必须附原文证据并通过人物事实 gate，不能直接投票落库。
 - 用户授权后已通过 Scoop 将 `codex-cli` 从 0.128.0 更新到 0.144.6；`codex exec --model gpt-5.6-sol` 冒烟测试成功。CLI 适合少量大块并行审校，不适合作为每个小批次都重新启动的同步 provider，后者会承担完整 agent 的固定开销。
+- 人物性别不能由姓名印象、外貌、服装、女性化/男性化语气或 `私/僕/俺/あたし` 等第一人称直接锁定；这些仅是弱证据。只有原文明示身份或人工证据确认的 `confirmed/verified` 事实才能进入翻译提示，未确认时应优先重复姓名/称谓、自然省略主语或采用中性表达。
+- 全书概览和最终术语库会把后文事实回灌早期章节；提示词必须保留当前章节的伪装、误认、悬念和限知视角。完整根治需要 NarrativeKnowledge Module 按 chapter/segment 投影 `visible_from` 事实；稳定译名可回灌，后揭示的人物事实不可回灌。
+- 自动术语抽取不得修改 `confirmed/verified` 事实，也不得为其 alias 重复建档；纯敬称、口癖和固定表达属于局部语境，不持久化为全书术语。确有独立译法的称谓仍保留，以免破坏昵称一致性。
 
 # Task Board
 
@@ -85,3 +88,7 @@
 - [x] 已向上游提交架构 Issue #87 和 guardrail PR #88；PR 分支 `codex/glossary-evidence-guardrails` 已推送。
 - [ ] 当前书籍状态含 270 个 ruby 污染 source 段、错误人物表和旧 DeepSeek 产物，不应直接续跑 reviewer；待确认后从干净 ingest 状态按 canonical 人物表重新翻译。
 - [x] 使用桌面端 3 个 `gpt-5.6-sol` 子代理完成 `ch1`–`ch136` 分段复查，主任务抽查最高风险原文/译文；合并报告位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-quality-audit\codex-sol-full-audit.md`，未覆盖译文。
+- [x] 干净重建状态完成第 1 章质量门；移除其自动抽取产生的 8 条污染术语和 1 条冲突，恢复为 31 条证据确认的 canonical 术语。
+- [x] 新增性别证据门与术语防污染：弱证据不注入性别，`confirmed/verified` 不可被自动抽取覆盖或由 alias 拆分；初译、精修、审校均要求保留身份悬念。相关 65 项通过，完整测试 277 项通过，仅 2 项既有 Windows `/tmp/output` 断言失败。
+- [ ] 后续架构深化：新增 NarrativeKnowledge Module，将稳定译名与时序人物事实拆分，并按 chapter/segment 的 `visible_from` 生成 Translator、Polisher、Reviewer、autofix、Consistency 共用视图。
+- [ ] 从干净重建状态第 2 章继续 Flash Medium 初译 + Pro High 精修；完成后由 Pro High 审校并抽取高风险章节复核。

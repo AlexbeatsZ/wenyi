@@ -55,14 +55,21 @@ class Analyzer(Agent):
             target = _text(ch.get("target"))
             if not source or not target:
                 continue
+            confidence = _text(ch.get("gender_confidence")).lower()
+            confirmed = confidence == "confirmed"
+            evidence = _text(ch.get("gender_evidence"))
+            note = _text(ch.get("note"))
+            if evidence:
+                note = f"{note}；性别证据：{evidence}" if note else f"性别证据：{evidence}"
             store.upsert_term(
                 GlossaryTerm(
                     source=source,
                     target=target,
                     reading=_text(ch.get("reading")),
                     type=TYPE_PERSON,
-                    gender=_text(ch.get("gender")),
-                    note=_text(ch.get("note")),
+                    gender=_text(ch.get("gender")) if confirmed else "",
+                    note=note,
+                    status="confirmed" if confirmed else "ok",
                     first_chapter=0,
                 ),
                 chapter=0,
@@ -106,7 +113,14 @@ class Analyzer(Agent):
         if chars:
             lines.append("角色：")
             for c in chars:
-                g = f"，{c.get('gender')}" if c.get("gender") else ""
+                gender_is_confirmed = (
+                    _text(c.get("gender_confidence")).lower() == "confirmed"
+                )
+                g = (
+                    f"，{c.get('gender')}"
+                    if c.get("gender") and gender_is_confirmed
+                    else ""
+                )
                 note = f"，{c.get('note')}" if c.get("note") else ""
                 lines.append(f"  - {c.get('target', c.get('source',''))}({c.get('source','')}{g}{note})")
         return "\n".join(lines)

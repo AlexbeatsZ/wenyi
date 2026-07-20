@@ -30,6 +30,7 @@ TYPE_SPEECH = "口癖"
 TYPE_FIXED_EXPR = "固定表达"
 
 _SOURCE_ONLY_TYPES = {TYPE_APPELLATION, TYPE_HONORIFIC, TYPE_SPEECH, TYPE_FIXED_EXPR}
+_PROTECTED_STATUSES = {"verified", "confirmed"}
 
 _HIRAGANA_TERM_RE = re.compile(r"^[\u3040-\u309f]+$")
 _KATAKANA_TERM_RE = re.compile(r"^[\u30a0-\u30ffー]+$")
@@ -256,6 +257,28 @@ class GlossaryStore:
         except Exception:
             self.conn.rollback()
             raise
+
+    def upsert_extracted_term(
+        self, term: GlossaryTerm, chapter: Optional[int] = None
+    ) -> str:
+        """Store an automatically extracted term without weakening verified facts.
+
+        A protected entry is a human/evidence-backed canonical fact.  Model
+        extraction may neither mutate it nor create a second entity for one of
+        its aliases.  Returning ``unchanged`` keeps extractor summaries stable
+        while making the storage boundary deterministic.
+        """
+        normalized_source = _match_text(term.source)
+        for existing in self.all_terms():
+            if existing.status not in _PROTECTED_STATUSES:
+                continue
+            verified_keys = [existing.source, *existing.aliases]
+            if any(
+                key and _match_text(key) == normalized_source
+                for key in verified_keys
+            ):
+                return "unchanged"
+        return self.upsert_term(term, chapter=chapter)
 
     def _log_conflict(self, source, existing_target, proposed_target, chapter):
         """在当前事务中记录一次候选译法冲突。"""

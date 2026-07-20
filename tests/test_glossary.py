@@ -14,6 +14,7 @@ from trans_novel.glossary.store import (
     TYPE_APPELLATION,
     TYPE_PERSON,
 )
+from trans_novel.agents import prompts
 
 
 class TestGlossary(unittest.TestCase):
@@ -119,6 +120,87 @@ class TestGlossary(unittest.TestCase):
         self.assertEqual(term.target, "掘北")
         self.assertEqual(term.status, "ok")
         self.assertEqual(self.store.open_conflicts(), [])
+
+    def test_extracted_alias_of_verified_term_reuses_canonical_entry(self):
+        self.store.upsert_term(
+            GlossaryTerm(
+                source="倉田",
+                target="仓田",
+                type=TYPE_PERSON,
+                aliases=["倉田さん", "倉田ちゃん"],
+                status="verified",
+            ),
+            chapter=0,
+        )
+
+        result = self.store.upsert_extracted_term(
+            GlossaryTerm(
+                source="倉田ちゃん",
+                target="小仓田",
+                type=TYPE_APPELLATION,
+                gender="女",
+            ),
+            chapter=1,
+        )
+
+        self.assertEqual(result, "unchanged")
+        self.assertIsNone(self.store.get_term("倉田ちゃん"))
+        canonical = self.store.get_term("倉田")
+        assert canonical is not None
+        self.assertEqual(canonical.target, "仓田")
+        self.assertEqual(canonical.status, "verified")
+
+    def test_extracted_term_cannot_mutate_or_conflict_with_verified_term(self):
+        self.store.upsert_term(
+            GlossaryTerm(
+                source="レズ",
+                target="女同",
+                type="术语",
+                note="人工确认",
+                status="verified",
+            ),
+            chapter=0,
+        )
+
+        result = self.store.upsert_extracted_term(
+            GlossaryTerm(
+                source="レズ",
+                target="女同性恋",
+                type="术语",
+                note="模型建议",
+            ),
+            chapter=1,
+        )
+
+        self.assertEqual(result, "unchanged")
+        term = self.store.get_term("レズ")
+        assert term is not None
+        self.assertEqual(term.target, "女同")
+        self.assertEqual(term.note, "人工确认")
+        self.assertEqual(term.status, "verified")
+        self.assertEqual(self.store.open_conflicts(), [])
+
+    def test_render_glossary_does_not_publish_unconfirmed_gender(self):
+        inferred = GlossaryTerm(
+            source="ケンコ",
+            target="健子",
+            type=TYPE_PERSON,
+            gender="女",
+            status="ok",
+        )
+        confirmed = GlossaryTerm(
+            source="店長",
+            target="店长",
+            type=TYPE_PERSON,
+            gender="女",
+            status="confirmed",
+        )
+
+        rendered = prompts.render_glossary([inferred, confirmed])
+
+        self.assertIn("ケンコ → 健子（人物）", rendered)
+        self.assertNotIn("ケンコ → 健子（人物，女）", rendered)
+        self.assertIn("店長 → 店长（人物，女）", rendered)
 
     def test_concurrent_upserts_make_one_atomic_conflict_decision(self):
         path = os.path.join(self.tmp.name, "concurrent.db")
