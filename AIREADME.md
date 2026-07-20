@@ -37,7 +37,7 @@
 - 本书 glossary 已膨胀到 1,074 条，其中 783 条属于术语/固定表达/称谓等非实体条目；现有 128 条审校问题中 102 条是术语强制问题。普通词必须区分 canonical 与 contextual，不能把 `カウンター/ベンチ/覚悟/調子に乗る` 等全局锁成唯一译法。
 - EPUB ruby 的 `<rt>` 是注音，`<rp>` 是不支持 ruby 时显示的备用括号；两者都不能进入可翻译 source。旧实现只跳过 `rt`，使本书 270 个 source 段出现 `伸枝（）/躍起（）` 等污染，当前状态无法靠继续 reviewer 修复，必须重新 ingest。
 - 多模型共识也不是事实：相同 67 段样本中 Claude Sonnet 4.6 与 Gemini Pro High 各报 19 项、重合 13 项，但两者都曾在缺少 canonical facts 时把女性尾关误推为男性。模型结论必须附原文证据并通过人物事实 gate，不能直接投票落库。
-- 本机 `codex-cli 0.128.0` 虽接受 `--model gpt-5.6-sol` 参数，但服务端要求更新版 Codex，当前不能直接用于流水线；桌面端原生 5.6-sol 子代理可用。升级 CLI 会影响全局环境，必须先征得用户同意。
+- 用户授权后已通过 Scoop 将 `codex-cli` 从 0.128.0 更新到 0.144.6；`codex exec --model gpt-5.6-sol` 冒烟测试成功。CLI 适合少量大块并行审校，不适合作为每个小批次都重新启动的同步 provider，后者会承担完整 agent 的固定开销。
 
 # Task Board
 
@@ -84,4 +84,4 @@
 - [x] 本地模型策略改为 Flash Medium 初译、Pro High 精修、Pro High 最终审核，术语抽取/梗概使用 Flash Medium；未重启翻译或审核。
 - [x] 已向上游提交架构 Issue #87 和 guardrail PR #88；PR 分支 `codex/glossary-evidence-guardrails` 已推送。
 - [ ] 当前书籍状态含 270 个 ruby 污染 source 段、错误人物表和旧 DeepSeek 产物，不应直接续跑 reviewer；待确认后从干净 ingest 状态按 canonical 人物表重新翻译。
-- [ ] 使用桌面端 3 个 `gpt-5.6-sol` 子代理分段复查全书，由主任务依据原文与 canonical facts 最终复核；只生成报告，尚不覆盖译文。
+- [x] 使用桌面端 3 个 `gpt-5.6-sol` 子代理完成 `ch1`–`ch136` 分段复查，主任务抽查最高风险原文/译文；合并报告位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-quality-audit\codex-sol-full-audit.md`，未覆盖译文。
