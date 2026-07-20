@@ -25,13 +25,14 @@ def _backtrans_compare_system(src: str) -> str:
 
 class Reviewer(Agent):
     def review(self, sources: list[str], targets: list[str],
-               glossary_terms=None) -> list[dict[str, Any]]:
+               glossary_terms=None, *, narrative_facts: str = "") -> list[dict[str, Any]]:
         """返回问题列表：[{index,type,detail,suggestion}]。"""
         if not sources:
             return []
         system = prompts.render("reviewer_system", src=self.src, tgt=self.tgt)
         user = prompts.render(
             "reviewer_user", src=self.src, tgt=self.tgt,
+            narrative_facts=narrative_facts or "（暂无）",
             glossary=prompts.render_glossary(glossary_terms or []),
             n=len(sources),
             pairs=prompts.numbered_pairs(sources, targets),

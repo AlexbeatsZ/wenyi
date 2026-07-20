@@ -45,6 +45,9 @@ class TestConfigFileCreation(unittest.TestCase):
             self.assertEqual(cfg.pipeline.backtranslate_sample, 0.0)
             self.assertFalse(cfg.pipeline.consistency_qa)
             self.assertEqual(cfg.pipeline.review_concurrency, 4)
+            self.assertEqual(cfg.pipeline.review_max_chars_per_batch, 0)
+            self.assertEqual(cfg.pipeline.future_context_policy, "current-only")
+            self.assertTrue(cfg.pipeline.require_polish_success)
             self.assertEqual(cfg.punctuation_quote_style, "source")
             self.assertIn("  quote_style: source", generated)
 
@@ -121,6 +124,28 @@ class TestConfigFileCreation(unittest.TestCase):
             cfg.translation_llm.tiers["strong"].model,
             "deepseek-v4-flash",
         )
+
+    def test_review_llm_is_loaded_independently(self):
+        cfg = Config.from_dict(
+            {
+                "llm": {"provider": "agy"},
+                "review_llm": {
+                    "provider": "codex-cli",
+                    "command": "codex",
+                    "tiers": {
+                        "cheap": {
+                            "model": "gpt-5.6-sol",
+                            "options": {"reasoning_effort": "high"},
+                        }
+                    },
+                },
+            }
+        )
+
+        self.assertIsNotNone(cfg.review_llm)
+        assert cfg.review_llm is not None
+        self.assertEqual(cfg.review_llm.provider, "codex-cli")
+        self.assertEqual(cfg.review_llm.tiers["cheap"].model, "gpt-5.6-sol")
 
 
 if __name__ == "__main__":

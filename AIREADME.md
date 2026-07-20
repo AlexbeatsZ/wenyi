@@ -1,7 +1,7 @@
 # Project Goal
 
 - 使用 Wenyi 将长篇小说可靠地翻译为简体中文，并保留 EPUB 的目录、样式、图片和锚点。
-- 当前任务：通过本机 agy CLI 断点续译指定的日文 EPUB；全部主要翻译与润色改用 Gemini 3.5 Flash (Medium)。
+- 当前任务：通过本机 agy CLI 用 Gemini Flash Medium 初译、Gemini Pro High 精修，并由 Codex Sol High 独立终审；所有身份事实按叙事位置投影。
 - 为正在翻译的小说提供只读局域网阅读页，允许手机边看当前译文边等待后续章节完成。
 
 # Lessons Learned
@@ -43,6 +43,11 @@
 - 保守代词策略不能机械制造含糊：当前原文明示或人物表确认时正常使用“他/她”；多条一致的当前叙事线索且不存在身份悬念/矛盾/反转信号时，也可按当下呈现自然用代词，但该局部选择不得升级成全书永久事实。只有单一/冲突证据或作品刻意隐藏身份时才保持中性。
 - 初译的逐段兜底若仍携带全书结局、本章梗概和完整滚动上下文，会把一次组合型 Gemini 内容策略拒绝原样重复到最终失败。只对已确认遭策略拒绝的单段移除未来/章节上下文，保留命中术语完成最小初译，再交给 Pro 带上下文精修；不应让整章换弱模型或静默降级。
 - 自动术语抽取不得修改 `confirmed/verified` 事实，也不得为其 alias 重复建档；纯敬称、口癖和固定表达属于局部语境，不持久化为全书术语。确有独立译法的称谓仍保留，以免破坏昵称一致性。
+- 全书/全章未来梗概不能只靠提示词要求模型“不要剧透”；默认 `future_context_policy: current-only`，Translator、Polisher 与 autofix 只接收当前位置可见的叙事事实。显式 `full` 仅用于兼容旧行为。
+- NarrativeKnowledge Module 将“表面词如何翻译”与“此处可以知道谁是谁”拆开：实体 alias 与事实都有 `visible_from/visible_until`，confirmed/verified 事实必须带原文证据和0基章节/段号；冲突事实和同时指向多人的职务称谓不注入。
+- 自动抽取器只能持久化空格/全半角/直接敬称后缀等透明 alias；昵称、代号、职务与本名的身份关联属于时序叙事事实，不能再写成全书永久 alias。
+- 精修返回原初译不是成功。`require_polish_success` 将失败段号持久化，并能从旧 `batch_translated` 事件恢复；回头重试早期章节时必须按书序重建前文上下文，不能误用最后已译章节的滚动尾部。
+- Codex CLI 适合作为独立 `review_llm`：用 ephemeral/read-only/no-tools 文本 Adapter 审校，严重项仍交给主 Gemini Pro 修复。Windows 上 `codex exec review` 的工具型只读沙箱可能因 `CreateProcessAsUserW 1312` 无法启动 PowerShell，但纯文本审校 Adapter 已真实通过。
 
 # Task Board
 
@@ -101,5 +106,8 @@
 - [x] 无未来上下文初译若仅发生 JSON/数组对齐错误，不再错误终止；保持无剧透上下文递归二分并恢复 1:1，对第 2 话实测 35 段返回 34 段的故障建立回归。相关测试 61 项通过。
 - [x] 第 2 话真实续跑完成 95 段：首批 40 段复用，第二批 35 段组合上下文 fallback 后由 Flash 整批初译、Pro 整批精修，失败索引为空；末批 20 段正常路径完成。章节术语无冲突，新增仅 `アンパンマン/チョモランマ/マック` 等合理条目。
 - [x] 当前全部修改完整离线测试 283 项与 15 个子测试通过；仍仅有 2 项既有 Windows `/tmp/output` 路径断言失败，与翻译/术语/策略拒绝修复无关。
-- [ ] 后续架构深化：新增 NarrativeKnowledge Module，将稳定译名与时序人物事实拆分，并按 chapter/segment 的 `visible_from` 生成 Translator、Polisher、Reviewer、autofix、Consistency 共用视图。
+- [x] 新增 NarrativeKnowledge Module：将稳定译名与时序人物事实拆分，并按 chapter/segment 的 `visible_from` 生成 Translator、Polisher、Reviewer、autofix 共用视图；Consistency 后续可复用相同投影。
 - [ ] 从干净重建状态第 2 章继续 Flash Medium 初译 + Pro High 精修；完成后由 Pro High 审校并抽取高风险章节复核。
+- [x] 新增独立 `review_llm` 与 `codex-cli` Adapter；当前配置使用 `gpt-5.6-sol` high 终审、24k 字符大块，真实 pronoun 错误烟测返回结构化问题。
+- [x] 精修失败改为可恢复质量门：旧事件扫描已识别当前干净状态 ch4 42段、ch6 47段、ch7 51段待补精修；续跑会按正确前文上下文重试，审校前拒绝静默放行。
+- [x] 新结构相关 300 项完整测试执行；298 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。

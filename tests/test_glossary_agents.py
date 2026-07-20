@@ -39,7 +39,10 @@ class TestAnalyzer(unittest.TestCase):
             "characters": [{"source": "綾小路", "target": "绫小路",
                             "gender": "男", "gender_confidence": "confirmed",
                             "gender_evidence": "原文明确称为男性",
-                            "reading": "あやのこうじ", "note": "第一人称用俺"}],
+                            "gender_evidence_chapter": 0,
+                            "gender_evidence_segment": 2,
+                            "reading": "あやのこうじ", "voice": "第一人称用俺",
+                            "note": "学生会成员"}],
             "terms": [{"source": "高度育成高校", "target": "高度育成高中", "type": "组织"}],
         }
         client = FakeClient(handler=lambda m, t, j: json.dumps(analysis, ensure_ascii=False))
@@ -164,6 +167,26 @@ class TestExtractor(unittest.TestCase):
         self.assertEqual(result[0].gender, "")
         self.assertEqual(result[0].aliases, [])
         self.assertEqual(result[0].note, "")
+
+    def test_extractor_keeps_only_transparent_aliases(self):
+        terms = {
+            "terms": [
+                {
+                    "source": "あんな",
+                    "target": "安奈",
+                    "type": "人物",
+                    "aliases": ["あんなさん", "店長", "謎の女"],
+                }
+            ]
+        }
+        extractor = GlossaryExtractor(
+            FakeClient(handler=lambda m, t, j: json.dumps(terms, ensure_ascii=False)),
+            _cfg(),
+        )
+
+        result = extractor.extract("あんな", "安奈", [])
+
+        self.assertEqual(result[0].aliases, ["あんなさん"])
 
     def test_contextual_phrases_are_not_persisted(self):
         terms = {

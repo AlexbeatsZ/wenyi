@@ -37,6 +37,7 @@ class Polisher(Agent):
         context: str,
         book_synopsis: str,
         chapter_digest: str,
+        narrative_facts: str,
         stage: str,
     ) -> list[str] | None:
         n = len(targets)
@@ -48,6 +49,7 @@ class Polisher(Agent):
             "polisher_user", src=self.src, tgt=self.tgt,
             glossary=prompts.render_glossary(glossary_terms),
             style=style or "（无）",
+            narrative_facts=narrative_facts or "（暂无）",
             book_synopsis=book_synopsis or "（无）",
             chapter_digest=chapter_digest or "（无）",
             context=context or "（无）",
@@ -79,6 +81,7 @@ class Polisher(Agent):
         context: str,
         book_synopsis: str,
         chapter_digest: str,
+        narrative_facts: str,
     ) -> list[str]:
         """逐段定位 policy 拒绝，只把仍被拒绝的段落交给备用客户端。"""
         polished: list[str] = []
@@ -90,6 +93,7 @@ class Polisher(Agent):
                 "context": context,
                 "book_synopsis": book_synopsis,
                 "chapter_digest": chapter_digest,
+                "narrative_facts": narrative_facts,
             }
             try:
                 result = self._call(
@@ -129,6 +133,7 @@ class Polisher(Agent):
         context: str = "",
         book_synopsis: str = "",
         chapter_digest: str = "",
+        narrative_facts: str = "",
     ) -> list[str]:
         """对照原文精修；policy 拒绝时逐段定位并只回退问题段。"""
         if not targets:
@@ -151,6 +156,7 @@ class Polisher(Agent):
                 context=context,
                 book_synopsis=book_synopsis,
                 chapter_digest=chapter_digest,
+                narrative_facts=narrative_facts,
                 stage="Polisher",
             )
         except ContentPolicyError:
@@ -164,6 +170,7 @@ class Polisher(Agent):
                     context="",
                     book_synopsis="",
                     chapter_digest="",
+                    narrative_facts=narrative_facts,
                     stage="PolisherContextFallback",
                 )
             except ContentPolicyError:
@@ -183,6 +190,7 @@ class Polisher(Agent):
                 context=context,
                 book_synopsis=book_synopsis,
                 chapter_digest=chapter_digest,
+                narrative_facts=narrative_facts,
             )
         except Exception:
             result = None

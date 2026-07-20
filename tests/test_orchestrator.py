@@ -63,6 +63,75 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIs(orch.polisher.fallback_client, deepseek)
         self.assertIs(orch.review_fixer.client, gemini)
 
+    def test_review_client_is_independent_but_fixes_stay_on_main_client(self):
+        cfg = _config("state")
+        main = FakeClient()
+        reviewer = FakeClient()
+
+        orch = Orchestrator(cfg, client=main, review_client=reviewer)
+
+        self.assertIs(orch.reviewer.client, reviewer)
+        self.assertIs(orch.review_fixer.client, main)
+
+    def test_failed_polish_remains_pending_and_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = os.path.join(directory, "retry-polish.txt")
+            with open(source_path, "w", encoding="utf-8") as file:
+                file.write("# 第一章\n\n一段原文。\n\n二段原文。\n")
+            cfg = _config(os.path.join(directory, "state"))
+            cfg.pipeline.review = False
+            cfg.pipeline.consistency_qa = False
+            cfg.pipeline.book_understanding = False
+
+            def fail_polish(messages, tier, json_mode):
+                if "中文润色编辑" in messages[0]["content"]:
+                    return json.dumps({"polished": []}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            store = Orchestrator(
+                cfg, client=FakeClient(handler=fail_polish)
+            ).run(source_path)
+            chapter = store.load_chapter(0)
+            self.assertEqual(
+                store.load_manifest()["chapters"][0]["status"], STATUS_PENDING
+            )
+            self.assertEqual(
+                chapter.meta["refinement_pending_indexes"],
+                list(range(len(chapter.text_segments))),
+            )
+
+            store = Orchestrator(
+                cfg, client=FakeClient(handler=routing_handler)
+            ).run(source_path)
+            chapter = store.load_chapter(0)
+            self.assertEqual(
+                store.load_manifest()["chapters"][0]["status"], STATUS_DONE
+            )
+            self.assertEqual(chapter.meta["refinement_pending_indexes"], [])
+            self.assertTrue(all((segment.target or "").startswith("润") for segment in chapter.text_segments))
+
+    def test_current_only_context_does_not_inject_future_synopsis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = os.path.join(directory, "no-spoiler.txt")
+            with open(source_path, "w", encoding="utf-8") as file:
+                file.write("# 第一章\n\nまだ秘密だ。\n")
+            cfg = _config(os.path.join(directory, "state"))
+            cfg.pipeline.review = False
+            cfg.pipeline.consistency_qa = False
+            cfg.pipeline.future_context_policy = "current-only"
+            client = FakeClient(handler=routing_handler)
+
+            Orchestrator(cfg, client=client).run(source_path)
+
+            prompts = [
+                call["messages"][-1]["content"]
+                for call in client.calls
+                if "文学翻译" in call["messages"][0]["content"]
+            ]
+            self.assertTrue(prompts)
+            self.assertTrue(all("全书概览：主线与人物关系" not in prompt for prompt in prompts))
+            self.assertTrue(all("本章梗概：人物登场" not in prompt for prompt in prompts))
+
     def test_pipeline_restores_outer_dialogue_quotes_dropped_by_models(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = os.path.join(directory, "dialogue.txt")
@@ -893,6 +962,7 @@ class TestStyleAnalysis(unittest.TestCase):
             labeled = Orchestrator._sample_text(doc)
             for tag in ("【开头样章】", "【中部样章】", "【结尾样章】"):
                 self.assertIn(tag, labeled)
+            self.assertRegex(labeled, r"\[C\d+:S\d+\]")
             plain = Orchestrator._sample_text(doc, labeled=False)
             self.assertNotIn("样章】", plain)
             self.assertIn("章0の段落0です", plain)

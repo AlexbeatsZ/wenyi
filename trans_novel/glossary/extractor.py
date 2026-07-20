@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 from ..agents import prompts
 from ..agents.base import Agent
 from .store import (
@@ -22,6 +24,19 @@ _CONTEXTUAL_TYPES = {
     TYPE_SPEECH,
     TYPE_FIXED_EXPR,
 }
+_TRANSPARENT_ALIAS_SUFFIXES = ("さん", "ちゃん", "くん", "君", "様", "先輩", "先生")
+
+
+def _transparent_alias(source: str, alias: str) -> bool:
+    """Allow only orthographic/honorific variants, never inferred identities."""
+    left = unicodedata.normalize("NFKC", source).replace(" ", "")
+    right = unicodedata.normalize("NFKC", alias).replace(" ", "")
+    if not left or not right or left == right:
+        return bool(left and right)
+    return any(
+        left + suffix == right or right + suffix == left
+        for suffix in _TRANSPARENT_ALIAS_SUFFIXES
+    )
 
 
 def _text(value: object, default: str = "") -> str:
@@ -59,7 +74,12 @@ class GlossaryExtractor(Agent):
                 reading=_text(d.get("reading")),
                 type=_text(d.get("type"), "术语"),
                 gender="" if gender == "未知" else gender,
-                aliases=[alias for a in aliases if (alias := _text(a))],
+                aliases=[
+                    alias
+                    for item in aliases
+                    if (alias := _text(item))
+                    and _transparent_alias(source, alias)
+                ],
                 note=_text(d.get("note")),
             ))
         return terms

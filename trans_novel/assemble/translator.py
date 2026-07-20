@@ -28,6 +28,7 @@ class Translator(Agent):
         context: str,
         book_synopsis: str = "",
         chapter_digest: str = "",
+        narrative_facts: str = "",
     ) -> list[str]:
         """调用一次批量翻译，并严格校验输出类型、数量和非空性。"""
         n = len(sources)
@@ -40,6 +41,7 @@ class Translator(Agent):
         user = prompts.render(
             "translator_user", src=self.src, tgt=self.tgt,
             style=style or "（无）",
+            narrative_facts=narrative_facts or "（暂无）",
             book_synopsis=book_synopsis or "（无）",
             glossary=prompts.render_glossary(glossary_terms),
             chapter_digest=chapter_digest or "（无）",
@@ -58,13 +60,13 @@ class Translator(Agent):
         return items
 
     def _translate_one(self, source, glossary_terms, style, context,
-                       book_synopsis, chapter_digest) -> str:
+                       book_synopsis, chapter_digest, narrative_facts="") -> str:
         """借用批量协议翻译单段，作为批量对齐失败后的最终兜底。"""
         self._last_call_used_policy_context_fallback = False
         try:
             out = self._call_batch(
                 [source], glossary_terms, style, context,
-                book_synopsis, chapter_digest,
+                book_synopsis, chapter_digest, narrative_facts,
             )
         except ContentPolicyError:
             # A policy rejection can be caused by the combination of a benign
@@ -72,7 +74,7 @@ class Translator(Agent):
             # Retry only this segment with stable terminology; Pro polishing
             # still restores literary context after the initial translation.
             out = self._call_batch(
-                [source], glossary_terms, "", "", "", "",
+                [source], glossary_terms, "", "", "", "", narrative_facts,
             )
             self._last_call_used_policy_context_fallback = True
         return out[0]
@@ -85,13 +87,14 @@ class Translator(Agent):
         context: str,
         book_synopsis: str,
         chapter_digest: str,
+        narrative_facts: str,
         *,
         offset: int,
     ) -> list[str]:
         """Bisect a policy-blocked batch and strip context only at the leaf."""
         if len(sources) == 1:
             result = self._call_batch(
-                sources, glossary_terms, "", "", "", "",
+                sources, glossary_terms, "", "", "", "", narrative_facts,
             )
             self.last_policy_context_fallback_indexes.append(offset)
             return result
@@ -110,6 +113,7 @@ class Translator(Agent):
                     context,
                     book_synopsis,
                     chapter_digest,
+                    narrative_facts,
                 )
             except ContentPolicyError:
                 result = self._translate_policy_partition(
@@ -119,6 +123,7 @@ class Translator(Agent):
                     context,
                     book_synopsis,
                     chapter_digest,
+                    narrative_facts,
                     offset=part_offset,
                 )
             translated.extend(result)
@@ -128,13 +133,14 @@ class Translator(Agent):
         self,
         sources: list[str],
         glossary_terms: list[GlossaryTerm],
+        narrative_facts: str = "",
         *,
         offset: int,
     ) -> list[str]:
         """Recover alignment after context stripping without restoring spoilers."""
         try:
             result = self._call_batch(
-                sources, glossary_terms, "", "", "", "",
+                sources, glossary_terms, "", "", "", "", narrative_facts,
             )
         except Exception:
             if len(sources) == 1:
@@ -142,11 +148,12 @@ class Translator(Agent):
             midpoint = len(sources) // 2
             return (
                 self._translate_stripped_partition(
-                    sources[:midpoint], glossary_terms, offset=offset,
+                    sources[:midpoint], glossary_terms, narrative_facts, offset=offset,
                 )
                 + self._translate_stripped_partition(
                     sources[midpoint:],
                     glossary_terms,
+                    narrative_facts,
                     offset=offset + midpoint,
                 )
             )
@@ -166,6 +173,7 @@ class Translator(Agent):
         context_after: str = "",
         book_synopsis: str = "",
         chapter_digest: str = "",
+        narrative_facts: str = "",
     ) -> str:
         """带审校意见定向重译单段（章末 autofix 用）。失败返回空串，由调用方决定弃用。
 
@@ -181,6 +189,7 @@ class Translator(Agent):
         user = prompts.render(
             "translator_fix_user", src=self.src, tgt=self.tgt,
             style=style or "（无）",
+            narrative_facts=narrative_facts or "（暂无）",
             book_synopsis=book_synopsis or "（无）",
             glossary=prompts.render_glossary(glossary_terms or []),
             chapter_digest=chapter_digest or "（无）",
@@ -204,6 +213,7 @@ class Translator(Agent):
         context: str = "",
         book_synopsis: str = "",
         chapter_digest: str = "",
+        narrative_facts: str = "",
     ) -> list[str]:
         """翻译一批源段，返回与之等长的译文列表。"""
         glossary_terms = glossary_terms or []
@@ -224,6 +234,7 @@ class Translator(Agent):
                     context,
                     book_synopsis,
                     chapter_digest,
+                    narrative_facts,
                 )
             except ContentPolicyError:
                 # Replaying the identical batch cannot fix a policy decision;
@@ -236,7 +247,7 @@ class Translator(Agent):
         if policy_rejected:
             try:
                 stripped_result = self._call_batch(
-                    sources, glossary_terms, "", "", "", "",
+                    sources, glossary_terms, "", "", "", "", narrative_facts,
                 )
                 self.last_policy_context_fallback_indexes.extend(range(n))
                 return stripped_result
@@ -249,6 +260,7 @@ class Translator(Agent):
                         context,
                         book_synopsis,
                         chapter_digest,
+                        narrative_facts,
                         offset=0,
                     )
                 except Exception as error:
@@ -259,7 +271,7 @@ class Translator(Agent):
                 try:
                     self.last_policy_context_fallback_indexes = []
                     return self._translate_stripped_partition(
-                        sources, glossary_terms, offset=0,
+                        sources, glossary_terms, narrative_facts, offset=0,
                     )
                 except Exception as partition_error:
                     raise AlignmentError(
@@ -278,6 +290,7 @@ class Translator(Agent):
                     context,
                     book_synopsis,
                     chapter_digest,
+                    narrative_facts,
                 )
                 targets.append(translated)
                 if self._last_call_used_policy_context_fallback:

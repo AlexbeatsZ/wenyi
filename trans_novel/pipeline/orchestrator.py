@@ -31,6 +31,7 @@ from ..llm.base import LLMClient
 from ..llm.factory import build_client, build_client_from_llm
 from ..llm.json_parser import JSONParseError
 from ..llm.usage import merge_usage_summaries, usage_delta
+from ..narrative import NarrativeKnowledge, NarrativePosition
 from ..ingest.segmenter import load_document, batch_segments
 from ..postprocess.punct import (
     normalize_zh,
@@ -51,6 +52,7 @@ from .runstore import (
     REVIEW_RUNNING,
     RunStore,
     STATUS_DONE,
+    STATUS_PENDING,
     slugify,
 )
 
@@ -122,6 +124,7 @@ class Orchestrator:
         config: Config,
         client: LLMClient | None = None,
         translation_client: LLMClient | None = None,
+        review_client: LLMClient | None = None,
     ):
         """初始化共享 LLM 客户端、用量检查点和各流水线 Agent。"""
         self.config = config
@@ -131,9 +134,15 @@ class Orchestrator:
             if config.translation_llm is not None
             else self.client
         )
+        self.review_client = review_client or (
+            build_client_from_llm(config.review_llm)
+            if config.review_llm is not None
+            else self.client
+        )
         self._usage_clients = list({id(item): item for item in (
             self.client,
             self.translation_client,
+            self.review_client,
         )}.values())
         # 各 client 的统计是进程内累计；checkpoint 用于每次落盘时只提取新增部分。
         self._usage_checkpoint = self._current_usage_summary()
@@ -142,7 +151,7 @@ class Orchestrator:
         self.translator = Translator(self.translation_client, config)
         # 最终审校修复属于精修阶段，始终使用主 llm；translation_llm 只负责初译。
         self.review_fixer = Translator(self.client, config)
-        self.reviewer = Reviewer(self.client, config)
+        self.reviewer = Reviewer(self.review_client, config)
         self.glossary_arbiter = GlossaryArbiter(self.client, config)
         self.backtrans = BackTranslator(self.client, config)
         self.polisher = Polisher(
@@ -169,6 +178,14 @@ class Orchestrator:
         return self.config.punctuation_normalize and (
             target == "zh" or target.startswith("zh-")
         )
+
+    def _prompt_plot_context(
+        self, book_synopsis: str, chapter_digest: str
+    ) -> tuple[str, str]:
+        """只在显式兼容模式下把全书/全章未来剧情注入当前位置。"""
+        if self.config.pipeline.future_context_policy == "full":
+            return book_synopsis, chapter_digest
+        return "", ""
 
     def _flush_usage(self, store: RunStore, *, scope: str) -> dict[str, Any]:
         """把当前 client 尚未落盘的用量增量合并到本书 usage.json。"""
@@ -392,8 +409,8 @@ class Orchestrator:
     def _sample_text(doc, *, labeled: bool = True) -> str:
         """取风格分析样章。labeled=True 时多点采样（开头/中部/结尾各一段，带中文标注），
         让分析覆盖全书风格全貌；labeled=False 返回单段纯源文（语言检测用，不能混入中文标签）。"""
-        candidates: list[tuple[str, int]] = []
-        for chapter in doc.chapters:
+        candidates: list[tuple[int, list[str], int]] = []
+        for chapter_index, chapter in enumerate(doc.chapters):
             sources = [segment.source for segment in chapter.text_segments]
             text = "\n".join(sources)
             if len(text) <= 200:
@@ -405,25 +422,44 @@ class Orchestrator:
                 bool(re.search(r"[。！？!?」』]", source)) and len(source) >= 20
                 for source in sources
             )
-            candidates.append((text, narrative_segments))
-        narrative_texts = [text for text, score in candidates if score >= 4]
-        texts = narrative_texts if narrative_texts else [text for text, _ in candidates]
-        if not texts:  # 兜底：全书都是短章
+            candidates.append((chapter_index, sources, narrative_segments))
+        narrative_chapters = [item for item in candidates if item[2] >= 4]
+        samples = narrative_chapters if narrative_chapters else candidates
+        if not samples:  # 兜底：全书都是短章
             joined = "\n".join(
                 s.source for ch in doc.chapters[:2] for s in ch.text_segments)
             return joined[:6000]
         if not labeled:
-            return texts[0][:6000]
-        picks = [(0, "开头样章"), (len(texts) // 2, "中部样章"), (len(texts) - 1, "结尾样章")]
+            return "\n".join(samples[0][1])[:6000]
+        picks = [
+            (0, "开头样章"),
+            (len(samples) // 2, "中部样章"),
+            (len(samples) - 1, "结尾样章"),
+        ]
         parts: list[str] = []
         seen: set[int] = set()
         for idx, tag in picks:
             if idx in seen:  # 短书（1-2 章）去重，不重复取同一章
                 continue
             seen.add(idx)
-            t = texts[idx]
-            chunk = t[-2800:] if tag == "结尾样章" else t[:2800]
-            parts.append(f"【{tag}】\n{chunk}")
+            chapter_index, sources, _ = samples[idx]
+            indexed = list(enumerate(sources))
+            if tag == "结尾样章":
+                indexed = list(reversed(indexed))
+            selected: list[tuple[int, str]] = []
+            size = 0
+            for segment_index, source in indexed:
+                if selected and size + len(source) > 2800:
+                    break
+                selected.append((segment_index, source))
+                size += len(source)
+            if tag == "结尾样章":
+                selected.reverse()
+            chunk = "\n".join(
+                f"[C{chapter_index}:S{segment_index}] {source}"
+                for segment_index, source in selected
+            )
+            parts.append(f"【{tag}】\n【0基章节 C{chapter_index}】\n{chunk}")
         return "\n\n".join(parts)
 
     def run(self, input_path: str, *, only_chapter: int | None = None,
@@ -461,6 +497,60 @@ class Orchestrator:
                 self._flush_usage(store, scope="prepare")
         return store
 
+    def _reconcile_refinement_pending(self, store: RunStore) -> dict[int, list[int]]:
+        """把旧运行日志中的精修失败迁移为可续跑的章节状态。"""
+        if not (
+            self.config.pipeline.polish
+            and self.config.pipeline.require_polish_success
+        ):
+            return {}
+        manifest = store.load_manifest()
+        recovered: dict[int, list[int]] = {}
+        for item in manifest.get("chapters", []):
+            chapter_index = item.get("index")
+            if not isinstance(chapter_index, int):
+                continue
+            indexes = sorted(store.refinement_pending_indexes(chapter_index))
+            if not indexes:
+                continue
+            chapter = store.load_chapter(chapter_index)
+            existing = {
+                index
+                for index in chapter.meta.get("refinement_pending_indexes", [])
+                if isinstance(index, int)
+            }
+            merged = sorted(existing | set(indexes))
+            chapter.meta["refinement_pending_indexes"] = merged
+            store.save_chapter(chapter)
+            store.set_chapter_status(chapter_index, STATUS_PENDING)
+            recovered[chapter_index] = merged
+        if recovered:
+            store.log_event("refinement_failures_reconciled", chapters=recovered)
+        return recovered
+
+    def _context_before_chapter(
+        self, store: RunStore, chapter_index: int
+    ) -> RollingContext:
+        """按书序重建指定章节之前的上下文，支持回头重试早期章节。"""
+        context = RollingContext(
+            max_recent_keep=max(
+                40, self.config.pipeline.rolling_context_segments
+            )
+        )
+        for item in store.load_manifest().get("chapters", []):
+            index = item.get("index")
+            if not isinstance(index, int) or index >= chapter_index:
+                continue
+            chapter = store.load_chapter(index)
+            context.add_targets(
+                [
+                    segment.target
+                    for segment in chapter.text_segments
+                    if segment.target and segment.target.strip()
+                ]
+            )
+        return context
+
     def _run_locked(
         self,
         store: RunStore,
@@ -469,6 +559,7 @@ class Orchestrator:
         progress: Optional[ProgressFn],
     ) -> RunStore:
         """恢复语言和上下文，依次翻译章节并持续保存用量与进度。"""
+        self._reconcile_refinement_pending(store)
         manifest = store.load_manifest()
         self._apply_language(manifest.get("source_lang") or self.config.source_lang)
         chapter_indices = {
@@ -485,12 +576,14 @@ class Orchestrator:
                 f"章节编号 {only_chapter} 不存在；可用范围：{valid_range}"
             )
         glossary = GlossaryStore(store.glossary_path)
-        context = RollingContext.from_dict(
-            store.load_context() or {},
-            min_recent_keep=max(40, self.config.pipeline.rolling_context_segments),
+        knowledge = NarrativeKnowledge(glossary)
+        style = self.analyzer.style_brief(
+            store.load_analysis() or {},
+            include_character_facts=(
+                self.config.pipeline.future_context_policy == "full"
+            ),
         )
-        style = self.analyzer.style_brief(store.load_analysis() or {})
-        # 翻译前预扫源文，建立全书理解（幂等、可续跑）；全书概览注入每章翻译
+        # 预扫结果继续用于分析与可选兼容模式；默认不向早期位置回灌未来剧情。
         book_synopsis = self._build_understanding(store, progress=progress)
 
         if only_chapter is not None:
@@ -511,8 +604,10 @@ class Orchestrator:
         )
         try:
             for ci in targets:
+                context = self._context_before_chapter(store, ci)
                 done = self._translate_chapter(
                     ci, store, glossary, context, style, book_synopsis,
+                    knowledge=knowledge,
                     progress=progress, done=done, total=total)
                 store.save_context(context.to_dict())
                 self._flush_usage(store, scope="chapter")
@@ -849,22 +944,43 @@ class Orchestrator:
 
     # ── 单章 ──────────────────────────────────────────────────────────────
     def _translate_chapter(self, ci: int, store: RunStore,
-                           glossary: GlossaryStore, context: RollingContext,
+                           glossary: GlossaryStore,
+                           context: RollingContext,
                            style: str, book_synopsis: str = "", *,
+                           knowledge: NarrativeKnowledge | None = None,
                            progress: Optional[ProgressFn] = None,
                            done: int = 0, total: int = 0) -> int:
         """翻译、润色和抽取单章并落盘，返回更新后的完成段数。"""
         chapter = store.load_chapter(ci)
+        knowledge = knowledge or NarrativeKnowledge(glossary)
         text_segs = chapter.text_segments
         if not text_segs:
             store.set_chapter_status(ci, STATUS_DONE)
             store.log_event("chapter_skipped", chapter=ci, reason="empty")
             return done
         chapter_digest = chapter.meta.get("source_digest", "")
+        refinement_pending = {
+            index
+            for index in chapter.meta.get("refinement_pending_indexes", [])
+            if isinstance(index, int) and 0 <= index < len(text_segs)
+        }
 
-        batches = _resume_batches(
+        raw_batches = _resume_batches(
             text_segs, self.config.segment.max_chars_per_batch
         )
+        batches: list[list] = []
+        raw_base = 0
+        for raw_batch in raw_batches:
+            points = knowledge.change_points(
+                ci, raw_base, raw_base + len(raw_batch)
+            )
+            local_starts = [0, *(point - raw_base for point in points), len(raw_batch)]
+            batches.extend(
+                raw_batch[left:right]
+                for left, right in zip(local_starts, local_starts[1:])
+                if left < right
+            )
+            raw_base += len(raw_batch)
         label = self._chapter_progress_label(chapter.title, ci)
         # prepare() 的最后一个标签通常是“解析文档…”。续跑首批可能先恢复术语，
         # 若不在章首刷新，整个模型请求期间都会错误地显示成仍在解析源文件。
@@ -886,7 +1002,62 @@ class Orchestrator:
             glossary_key = store.batch_glossary_key(batch_start, len(b))
             existing_targets = [s.target for s in b if s.target and s.target.strip()]
             if len(existing_targets) == len(b):
-                # 该批上次已在原位、原上下文中译完 → 复用，重建滚动上下文后跳过
+                pending_here = sorted(
+                    index
+                    for index in refinement_pending
+                    if batch_start <= index < batch_start + len(b)
+                )
+                if self.config.pipeline.polish and pending_here:
+                    if not translation_changed:
+                        chapter.meta["review_issues"] = []
+                        chapter.meta.pop("review_digest", None)
+                        translation_changed = True
+                    view = knowledge.view(
+                        "\n".join(segment.source for segment in b),
+                        NarrativePosition(ci, batch_start),
+                        fallback_terms=term_snapshot,
+                    )
+                    safe_synopsis, safe_digest = self._prompt_plot_context(
+                        book_synopsis, chapter_digest
+                    )
+                    polished = self.polisher.polish(
+                        existing_targets,
+                        sources=[segment.source for segment in b],
+                        glossary_terms=view.terms,
+                        style=style,
+                        context=context.render(
+                            self.config.pipeline.rolling_context_segments
+                        ),
+                        book_synopsis=safe_synopsis,
+                        chapter_digest=safe_digest,
+                        narrative_facts=view.render_facts(),
+                    )
+                    if len(polished) == len(b):
+                        for segment, target in zip(b, polished):
+                            segment.target = target
+                        existing_targets = polished
+                    refinement_pending.difference_update(
+                        range(batch_start, batch_start + len(b))
+                    )
+                    refinement_pending.update(
+                        batch_start + index
+                        for index in self.polisher.last_failed_indexes
+                    )
+                    chapter.meta["refinement_pending_indexes"] = sorted(
+                        refinement_pending
+                    )
+                    store.save_chapter(chapter)
+                    store.log_event(
+                        "batch_repolished",
+                        chapter=ci,
+                        start_index=batch_start,
+                        count=len(b),
+                        failed_indexes=[
+                            batch_start + index
+                            for index in self.polisher.last_failed_indexes
+                        ],
+                    )
+                # 该批上次已在原位译完；必要的精修重试后重建滚动上下文。
                 context.add_targets(existing_targets)
                 if glossary_key in glossary_checkpoints:
                     summary = {"inserted": 0, "conflict": 0, "unchanged": 0,
@@ -920,10 +1091,34 @@ class Orchestrator:
                 chapter.meta["review_issues"] = []
                 chapter.meta.pop("review_digest", None)
                 translation_changed = True
-            res = self._process_batch(b, term_snapshot, ctx_text, style,
-                                      book_synopsis, chapter_digest)
+            view = knowledge.view(
+                "\n".join(segment.source for segment in b),
+                NarrativePosition(ci, batch_start),
+                fallback_terms=term_snapshot,
+            )
+            safe_synopsis, safe_digest = self._prompt_plot_context(
+                book_synopsis, chapter_digest
+            )
+            res = self._process_batch(
+                b,
+                view.terms,
+                ctx_text,
+                style,
+                safe_synopsis,
+                safe_digest,
+                view.render_facts(),
+            )
             for s, t in zip(b, res.targets):
                 s.target = t
+            refinement_pending.difference_update(
+                range(batch_start, batch_start + len(b))
+            )
+            refinement_pending.update(
+                batch_start + index for index in res.refinement_failed_indexes
+            )
+            chapter.meta["refinement_pending_indexes"] = sorted(
+                refinement_pending
+            )
             store.log_event(
                 "batch_translated",
                 chapter=ci,
@@ -1040,9 +1235,21 @@ class Orchestrator:
         store.save_chapter(chapter)
         if translation_changed:
             store.set_chapter_review_status(ci, REVIEW_PENDING)
-        store.set_chapter_status(ci, STATUS_DONE)
+        if (
+            self.config.pipeline.polish
+            and self.config.pipeline.require_polish_success
+            and refinement_pending
+        ):
+            store.set_chapter_status(ci, STATUS_PENDING)
+            store.log_event(
+                "chapter_refinement_pending",
+                chapter=ci,
+                indexes=sorted(refinement_pending),
+            )
+        else:
+            store.set_chapter_status(ci, STATUS_DONE)
         store.log_event(
-            "chapter_done",
+            "chapter_done" if not refinement_pending else "chapter_draft_done",
             chapter=ci,
             title=chapter.title,
             segment_count=len(text_segs),
@@ -1082,7 +1289,7 @@ class Orchestrator:
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation")
-    _REVIEW_SCHEMA_VERSION = 3
+    _REVIEW_SCHEMA_VERSION = 4
     _GLOSSARY_ARBITER_BATCH_CHARS = 4500
     _GLOSSARY_DECISION_ATTEMPTS = 2
 
@@ -1268,22 +1475,32 @@ class Orchestrator:
             progress(resolved, len(items), "Gemini 术语冲突裁定完成")
         return resolved
 
-    def _review_digest(self, text_segs, terms, *, autofix: bool) -> str:
+    def _review_digest(
+        self,
+        text_segs,
+        terms,
+        *,
+        autofix: bool,
+        narrative_digest: str = "",
+    ) -> str:
         """计算一章审校输入摘要，用于识别可安全跳过的重复审校。
 
         摘要包含源译文、实际注入的最终术语快照、语言和自动修复策略；任一项
         变化都会使旧审校结果失效。提示词或审校协议变化时应递增 schema 版本。
         """
+        review_llm = self.config.review_llm or self.config.llm
         payload = {
             "version": self._REVIEW_SCHEMA_VERSION,
             "review_model": {
-                "provider": self.config.llm.provider,
+                "provider": review_llm.provider,
                 "model": (
-                    self.config.llm.tiers.get("cheap").model
-                    if self.config.llm.tiers.get("cheap") is not None
+                    review_llm.tiers.get("cheap").model
+                    if review_llm.tiers.get("cheap") is not None
                     else None
                 ),
             },
+            "narrative_knowledge": narrative_digest,
+            "future_context_policy": self.config.pipeline.future_context_policy,
             "source_lang": self.config.source_lang,
             "target_lang": self.config.target_lang,
             "autofix": autofix,
@@ -1324,6 +1541,7 @@ class Orchestrator:
         并行送审。检测阶段只读固定译文；一个章节的全部问题合并后，严重项才按
         段号串行修复。已完成且输入摘要未变化的章节会被跳过，支持断点续审。
         """
+        self._reconcile_refinement_pending(store)
         manifest = store.load_manifest()
         pending = [
             chapter["index"]
@@ -1361,8 +1579,15 @@ class Orchestrator:
         done = 0
         all_issues: list[dict] = []
         analysis = store.load_analysis() or {}
-        style = self.analyzer.style_brief(analysis)
+        style = self.analyzer.style_brief(
+            analysis,
+            include_character_facts=(
+                self.config.pipeline.future_context_policy == "full"
+            ),
+        )
         book_synopsis = str(analysis.get("book_synopsis", "") or "")
+        knowledge = NarrativeKnowledge(glossary)
+        knowledge_digest = knowledge.digest()
 
         store.log_event(
             "book_review_started",
@@ -1377,7 +1602,10 @@ class Orchestrator:
             text_segs = chapter.text_segments
             term_snapshot = self._chapter_term_snapshot(glossary, text_segs)
             digest = self._review_digest(
-                text_segs, term_snapshot, autofix=do_autofix
+                text_segs,
+                term_snapshot,
+                autofix=do_autofix,
+                narrative_digest=knowledge_digest,
             )
             label = f"全书审校：{self._chapter_progress_label(chapter.title, ci)}"
 
@@ -1407,7 +1635,12 @@ class Orchestrator:
             if progress:
                 progress(done, total, label)
             try:
-                new_issues = self._review_chapter(text_segs, term_snapshot)
+                new_issues = self._review_chapter(
+                    text_segs,
+                    term_snapshot,
+                    knowledge=knowledge,
+                    chapter_index=ci,
+                )
                 for issue in new_issues:
                     issue["chapter"] = ci
                     issue.setdefault("fixed", False)
@@ -1421,6 +1654,7 @@ class Orchestrator:
                         style,
                         book_synopsis,
                         str(chapter.meta.get("source_digest", "") or ""),
+                        knowledge=knowledge,
                         store=store,
                         chapter_index=ci,
                     )
@@ -1431,7 +1665,10 @@ class Orchestrator:
 
                 chapter.meta["review_issues"] = new_issues
                 chapter.meta["review_digest"] = self._review_digest(
-                    text_segs, term_snapshot, autofix=do_autofix
+                    text_segs,
+                    term_snapshot,
+                    autofix=do_autofix,
+                    narrative_digest=knowledge_digest,
                 )
                 store.save_chapter(chapter)
                 store.set_chapter_review_status(ci, REVIEW_DONE)
@@ -1464,7 +1701,14 @@ class Orchestrator:
         )
         return all_issues
 
-    def _review_chapter(self, text_segs, terms) -> list[dict]:
+    def _review_chapter(
+        self,
+        text_segs,
+        terms,
+        *,
+        knowledge: NarrativeKnowledge | None = None,
+        chapter_index: int = 0,
+    ) -> list[dict]:
         """把一章切成连续块并行审校，返回映射到章内段号的问题。
 
         块 = 连续段序列（约 3 倍翻译批大小，减少调用次数与重复注入的输入 token）；
@@ -1472,32 +1716,74 @@ class Orchestrator:
         越界 index 直接丢弃（模型幻觉防御）。各块只读固定译文和术语快照，
         可并行调用；结果始终按原块顺序合并，保持确定性。
         """
-        budget = self.config.segment.max_chars_per_batch * 3
+        budget = (
+            self.config.pipeline.review_max_chars_per_batch
+            or self.config.segment.max_chars_per_batch * 3
+        )
         chunks = self._pack_contiguous(text_segs, budget)
+        if knowledge is not None:
+            split_chunks: list[list] = []
+            chunk_base = 0
+            for chunk in chunks:
+                points = knowledge.change_points(
+                    chapter_index, chunk_base, chunk_base + len(chunk)
+                )
+                local_starts = [
+                    0,
+                    *(point - chunk_base for point in points),
+                    len(chunk),
+                ]
+                split_chunks.extend(
+                    chunk[left:right]
+                    for left, right in zip(local_starts, local_starts[1:])
+                    if left < right
+                )
+                chunk_base += len(chunk)
+            chunks = split_chunks
         if not chunks:
             return []
 
-        jobs: list[tuple[int, list]] = []
+        jobs: list[tuple[int, list, list, str]] = []
         base = 0
         for chunk in chunks:
-            jobs.append((base, chunk))
+            chunk_terms = terms
+            narrative_facts = ""
+            if knowledge is not None:
+                view = knowledge.view(
+                    "\n".join(segment.source for segment in chunk),
+                    NarrativePosition(chapter_index, base),
+                    fallback_terms=terms,
+                )
+                chunk_terms = view.terms
+                narrative_facts = view.render_facts()
+            jobs.append((base, chunk, chunk_terms, narrative_facts))
             base += len(chunk)
 
-        def review_one(job: tuple[int, list]) -> list[dict]:
+        def review_one(job: tuple[int, list, list, str]) -> list[dict]:
             """审校一个连续块，并把块内问题索引映射为章内索引。"""
-            chunk_base, chunk = job
+            chunk_base, chunk, chunk_terms, narrative_facts = job
             srcs = [s.source for s in chunk]
             tgts = [s.target or "" for s in chunk]
             try:
-                raw_issues = self.reviewer.review(srcs, tgts, terms)
+                raw_issues = self.reviewer.review(
+                    srcs,
+                    tgts,
+                    chunk_terms,
+                    narrative_facts=narrative_facts,
+                )
             except JSONParseError:
                 # complete_json 已带强化提示重试；继续失败时缩小输出规模。
                 if len(chunk) <= 1:
                     raise
                 midpoint = len(chunk) // 2
                 return (
-                    review_one((chunk_base, chunk[:midpoint]))
-                    + review_one((chunk_base + midpoint, chunk[midpoint:]))
+                    review_one((chunk_base, chunk[:midpoint], chunk_terms, narrative_facts))
+                    + review_one((
+                        chunk_base + midpoint,
+                        chunk[midpoint:],
+                        chunk_terms,
+                        narrative_facts,
+                    ))
                 )
             chunk_issues: list[dict] = []
             for it in raw_issues:
@@ -1549,6 +1835,7 @@ class Orchestrator:
 
     def _autofix_severe(self, text_segs, issues, terms, style,
                         book_synopsis: str = "", chapter_digest: str = "", *,
+                        knowledge: NarrativeKnowledge | None = None,
                         store: RunStore | None = None,
                         chapter_index: int | None = None) -> None:
         """对审校严重项（漏译/误译）带审校意见定向重译，每段最多一次。
@@ -1570,10 +1857,24 @@ class Orchestrator:
             feedback = "；".join(
                 f"{it.get('detail', '')}（建议：{it.get('suggestion', '')}）"
                 for it in seg_issues)
+            segment_terms = terms
+            narrative_facts = ""
+            if knowledge is not None and chapter_index is not None:
+                view = knowledge.view(
+                    seg.source,
+                    NarrativePosition(chapter_index, idx),
+                    fallback_terms=terms,
+                )
+                segment_terms = view.terms
+                narrative_facts = view.render_facts()
+            safe_synopsis, safe_digest = self._prompt_plot_context(
+                book_synopsis, chapter_digest
+            )
             new_t = self.review_fixer.retranslate_with_feedback(
-                seg.source, feedback=feedback, glossary_terms=terms, style=style,
+                seg.source, feedback=feedback, glossary_terms=segment_terms, style=style,
                 context_before=before, context_after=after,
-                book_synopsis=book_synopsis, chapter_digest=chapter_digest)
+                book_synopsis=safe_synopsis, chapter_digest=safe_digest,
+                narrative_facts=narrative_facts)
             if new_t and not checks.length_flags([seg.source], [new_t]):
                 if self._punctuation_enabled():
                     new_t = normalize_zh(
@@ -1612,7 +1913,8 @@ class Orchestrator:
                 )
 
     def _process_batch(self, batch, terms, ctx_text: str, style: str,
-                       book_synopsis: str = "", chapter_digest: str = "") -> _BatchResult:
+                        book_synopsis: str = "", chapter_digest: str = "",
+                        narrative_facts: str = "") -> _BatchResult:
         """单个批次：整批翻译 → 润色。
 
         每段都在自身上下文里翻译，不跨位置复用译文（避免丢失语境信息）。
@@ -1623,7 +1925,8 @@ class Orchestrator:
         sources = [s.source for s in batch]
         targets = self.translator.translate_batch(
             sources, glossary_terms=terms, style=style, context=ctx_text,
-            book_synopsis=book_synopsis, chapter_digest=chapter_digest)
+            book_synopsis=book_synopsis, chapter_digest=chapter_digest,
+            narrative_facts=narrative_facts)
 
         policy_fallback_indexes = list(
             self.translator.last_policy_context_fallback_indexes
@@ -1638,6 +1941,7 @@ class Orchestrator:
                 context=ctx_text,
                 book_synopsis=book_synopsis,
                 chapter_digest=chapter_digest,
+                narrative_facts=narrative_facts,
             )
             if len(polished) == len(targets):
                 targets = polished

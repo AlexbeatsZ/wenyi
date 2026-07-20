@@ -42,6 +42,10 @@ def build_client_from_llm(llm: LLMConfig) -> LLMClient:
         from .providers.agy import AgyClient
 
         return AgyClient(llm)
+    if provider in {"codex", "codex-cli"}:
+        from .providers.codex_cli import CodexCLIClient
+
+        return CodexCLIClient(llm)
     if provider == "fake":
         from .providers.fake import FakeClient
 
@@ -49,5 +53,5 @@ def build_client_from_llm(llm: LLMConfig) -> LLMClient:
     raise ValueError(
         f"未知 provider：{provider}"
         "（支持 deepseek / openai / openrouter / openai-compatible / "
-        "ollama / vllm / agy / fake）"
+        "ollama / vllm / agy / codex-cli / fake）"
     )

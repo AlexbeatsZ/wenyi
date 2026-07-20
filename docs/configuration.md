@@ -59,11 +59,37 @@ translation_llm:
         reasoning_effort: high
 ```
 
-With `pipeline.polish` enabled, each batch is first translated by DeepSeek and
-then refined by the main `llm` against the source text, draft, whole-book
-synopsis, chapter digest, relevant glossary, and recent finalized translation.
+With `pipeline.polish` enabled, each batch is first translated by the initial
+provider and then refined by the main `llm` against the source text, draft,
+position-visible narrative facts, relevant glossary, and recent finalized
+translation. Whole-book/chapter future summaries are included only when
+`future_context_policy: full` is selected.
 Without `translation_llm`, first drafts continue to use the main `llm` for
 backward compatibility. API keys remain environment-only.
+
+### Separate final-review model
+
+`review_llm` optionally assigns only the independent final-review pass to a
+different provider. Severe fixes still use the main `llm`, so the auditor finds
+problems while the configured refinement model remains responsible for edits.
+The local Codex CLI can be used as a read-only Sol auditor:
+
+```yaml
+review_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/you/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    cheap:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+```
+
+This adapter launches an ephemeral `codex exec` process in a read-only sandbox,
+sends the request through stdin, and explicitly forbids tools or file access. It
+is intended for final review rather than every small translation batch.
 
 The first PDF import also reads `MINERU_API_KEY` to call the MinerU conversion service. This key is independent of the LLM provider and is not written to `config.yaml`.
 
@@ -227,7 +253,10 @@ pipeline:
   book_understanding: true
   prescan_concurrency: 4
   review_concurrency: 4
+  review_max_chars_per_batch: 0
   glossary_scope: chapter
+  future_context_policy: current-only
+  require_polish_success: true
 ```
 
 - `review`: disabled by default; when enabled, automatically run the independent final-review stage after the complete book has been translated. The explicit `trans-novel review` command remains available while this is disabled.
@@ -240,7 +269,10 @@ pipeline:
 - `book_understanding`: prescan the book to create chapter digests and a whole-book synopsis.
 - `prescan_concurrency`: number of chapter-digest requests that may run concurrently.
 - `review_concurrency`: number of contiguous final-review chunks that may run concurrently against the completed glossary; set it to `1` for sequential review.
+- `review_max_chars_per_batch`: source-character budget for one final-review request. `0` uses three times the translation batch size; CLI auditors should use a larger value to amortize agent startup cost.
 - `glossary_scope`: `chapter` includes terms relevant to the current chapter; `full` includes the complete glossary.
+- `future_context_policy`: `current-only` (default) keeps full-book and full-chapter future plot summaries out of translation, polishing, and autofix prompts. `full` restores the legacy injection behaviour.
+- `require_polish_success`: keep failed polish indexes pending and retry them on resume instead of silently treating the first draft as finished.
 
 The command-line flags `--polish`, `--no-polish`, `--qa`, and `--no-qa` override the corresponding configuration values for that run.
 

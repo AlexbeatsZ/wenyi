@@ -41,6 +41,19 @@ translation_llm:
     fast:
       model: Gemini 3.5 Flash (Medium)
 
+# 独立终审：Codex Sol High 只负责找错；严重项仍由主 llm 的 Gemini Pro High 定向修复。
+# Codex 以无状态、只读、禁止工具的 CLI Adapter 运行，不参与每个正文小批次。
+review_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/Meta/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    cheap:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:
   # 一个翻译批次（句群）的目标大小，按字符粗略估算 token。
@@ -63,7 +76,10 @@ pipeline:
     # fast 档免思考，全书概览为恒定前缀可命中缓存复用；关掉省去预扫成本
   prescan_concurrency: 4 # 预扫逐章梗概的并发线程数（各章独立，1=串行）
   review_concurrency: 4 # 最终审校连续分块的并发数（只读最终译文/术语快照，1=串行）
+  review_max_chars_per_batch: 24000 # Codex CLI 用较大连续块，减少完整 agent 的启动次数
   glossary_scope: chapter # chapter=只注入本章出现的词条（长书省 token）；full=全量表
+  future_context_policy: current-only # 不把全书结局/全章后半信息回灌到早期段落
+  require_polish_success: true # Pro 精修失败段必须重试，不能把 Flash 初译静默当成成品
 
 # ── 敬称策略（日语源文本时生效，其它语言通常不会用到）────────────────────
 honorific:

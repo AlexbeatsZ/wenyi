@@ -307,6 +307,42 @@ class RunStore:
             self._batch_glossary_event_cache = completed
         return set(self._batch_glossary_event_cache.get(chapter, set()))
 
+    def refinement_pending_indexes(self, chapter: int) -> set[int]:
+        """从追加事件恢复尚未成功精修的绝对段号。"""
+        pending: set[int] = set()
+        if not os.path.isfile(self.event_log_path):
+            return pending
+        with open(self.event_log_path, "r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if row.get("chapter") != chapter:
+                    continue
+                event = row.get("event")
+                start = row.get("start_index")
+                count = row.get("count")
+                if not isinstance(start, int) or not isinstance(count, int):
+                    continue
+                batch_indexes = set(range(start, start + count))
+                if event == "batch_translated":
+                    pending.difference_update(batch_indexes)
+                    if row.get("polish_requested"):
+                        pending.update(
+                            start + index
+                            for index in row.get("polish_failed_indexes", [])
+                            if isinstance(index, int) and 0 <= index < count
+                        )
+                elif event == "batch_repolished":
+                    pending.difference_update(batch_indexes)
+                    pending.update(
+                        index
+                        for index in row.get("failed_indexes", [])
+                        if isinstance(index, int) and index in batch_indexes
+                    )
+        return pending
+
     # ── 追加式事件日志 ────────────────────────────────────────────────────
     def log_event(self, event: str, **data: Any) -> None:
         """追加一条 JSONL 事件，用于翻译行为、改写前后和产物对账。"""

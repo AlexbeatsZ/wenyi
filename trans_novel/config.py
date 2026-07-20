@@ -19,7 +19,7 @@ language:
 
 # ── LLM ──────────────────────────────────────────────────────────────────
 llm:
-  # deepseek | openai | openrouter | openai-compatible | ollama | vllm | agy | fake
+  # deepseek | openai | openrouter | openai-compatible | ollama | vllm | agy | codex-cli | fake
   provider: deepseek
   base_url: https://api.deepseek.com
   api_key_env: DEEPSEEK_API_KEY
@@ -41,6 +41,17 @@ llm:
       options:
         thinking: false
 
+# 可选：只把最终审校交给独立模型。省略时复用主 llm。
+# review_llm:
+#   provider: codex-cli
+#   command: codex
+#   timeout: 1200
+#   tiers:
+#     cheap:
+#       model: gpt-5.6-sol
+#       options:
+#         reasoning_effort: high
+
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:
   # 一个翻译批次（句群）的目标大小，按字符粗略估算 token。
@@ -61,7 +72,10 @@ pipeline:
   book_understanding: true # 翻译前预扫源文，生成全书概览+逐章梗概注入翻译
   prescan_concurrency: 4 # 预扫逐章梗概的并发线程数（各章独立，1=串行）
   review_concurrency: 4 # 最终审校连续分块的并发数（只读最终译文/术语快照，1=串行）
+  review_max_chars_per_batch: 0 # 0=翻译批次上限的3倍；CLI 审校可调大以减少进程启动
   glossary_scope: chapter # chapter=本章相关词条；full=全量表
+  future_context_policy: current-only # current-only=不向早期段落回灌全书/全章未来剧情；full=旧行为
+  require_polish_success: true # 精修失败索引必须重试，不能把初译静默视为成品
 
 # ── 敬称策略（日语源文本时生效，其它语言通常不会用到）────────────────────
 honorific:
@@ -130,7 +144,10 @@ class PipelineConfig(BaseModel):
     book_understanding: bool = True
     prescan_concurrency: int = 4     # 预扫逐章梗概的并发线程数（各章独立，1=串行）
     review_concurrency: int = 4      # 最终审校连续分块并发数（结果按原块序合并，1=串行）
+    review_max_chars_per_batch: int = 0  # 0=3*翻译批次；CLI 审校可使用更大块
     glossary_scope: str = "chapter"  # chapter=只注入本章出现的词条（省 token）；full=全量表
+    future_context_policy: Literal["current-only", "full"] = "current-only"
+    require_polish_success: bool = True
 
 
 class OutputConfig(BaseModel):
@@ -148,6 +165,7 @@ class Config(BaseModel):
     target_lang: str = "zh"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     translation_llm: LLMConfig | None = None
+    review_llm: LLMConfig | None = None
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
@@ -186,6 +204,12 @@ class Config(BaseModel):
             if isinstance(translation_raw, dict)
             else None
         )
+        review_raw = raw.get("review_llm")
+        review_llm = (
+            _parse_llm_config(review_raw)
+            if isinstance(review_raw, dict)
+            else None
+        )
         segment = SegmentConfig.model_validate(raw.get("segment", {}) or {})
         pipeline = PipelineConfig.model_validate(raw.get("pipeline", {}) or {})
         output = OutputConfig.model_validate(raw.get("output", {}) or {})
@@ -195,6 +219,7 @@ class Config(BaseModel):
             target_lang=lang.get("target", "zh"),
             llm=llm,
             translation_llm=translation_llm,
+            review_llm=review_llm,
             segment=segment,
             pipeline=pipeline,
             output=output,

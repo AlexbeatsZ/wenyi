@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..glossary.store import GlossaryStore, GlossaryTerm, TYPE_PERSON
+from ..narrative import NarrativeKnowledge
 from . import prompts
 from .base import Agent
 
@@ -50,14 +51,22 @@ class Analyzer(Agent):
     def seed_glossary(self, store: GlossaryStore, analysis: dict[str, Any]) -> int:
         """把分析得到的角色/术语种入术语库，返回写入条目数。"""
         count = 0
+        knowledge = NarrativeKnowledge(store)
         for ch in self.dict_items(analysis.get("characters")):
             source = _text(ch.get("source"))
             target = _text(ch.get("target"))
             if not source or not target:
                 continue
             confidence = _text(ch.get("gender_confidence")).lower()
-            confirmed = confidence == "confirmed"
             evidence = _text(ch.get("gender_evidence"))
+            evidence_chapter = ch.get("gender_evidence_chapter")
+            confirmed = (
+                confidence in {"confirmed", "verified"}
+                and bool(evidence)
+                and isinstance(evidence_chapter, int)
+                and not isinstance(evidence_chapter, bool)
+                and evidence_chapter >= 0
+            )
             note = _text(ch.get("note"))
             if evidence:
                 note = f"{note}；性别证据：{evidence}" if note else f"性别证据：{evidence}"
@@ -69,11 +78,15 @@ class Analyzer(Agent):
                     type=TYPE_PERSON,
                     gender=_text(ch.get("gender")) if confirmed else "",
                     note=note,
+                    # Identity aliases are time-scoped by NarrativeKnowledge;
+                    # a flat glossary alias would make a later reveal global.
+                    aliases=[],
                     status="confirmed" if confirmed else "ok",
                     first_chapter=0,
                 ),
                 chapter=0,
             )
+            knowledge.seed_character(ch)
             count += 1
         for tm in self.dict_items(analysis.get("terms")):
             source = _text(tm.get("source"))
@@ -94,8 +107,13 @@ class Analyzer(Agent):
             count += 1
         return count
 
-    def style_brief(self, analysis: dict[str, Any]) -> str:
-        """把分析结果浓缩成给译者注入的风格/角色简报。"""
+    def style_brief(
+        self,
+        analysis: dict[str, Any],
+        *,
+        include_character_facts: bool = False,
+    ) -> str:
+        """把分析结果浓缩为风格简报，默认排除可能剧透的人物事实。"""
         lines = []
         if analysis.get("genre"):
             lines.append(f"体裁：{analysis['genre']}")
@@ -109,11 +127,17 @@ class Analyzer(Agent):
                          ("rhetoric", "修辞")):
             if analysis.get(key):
                 lines.append(f"{tag}：{analysis[key]}")
-        chars = self.dict_items(analysis.get("characters"))
+        chars = [
+            character
+            for character in self.dict_items(analysis.get("characters"))
+            if include_character_facts or _text(character.get("voice"))
+        ]
         if chars:
             lines.append("角色：")
             for c in chars:
                 gender_is_confirmed = (
+                    include_character_facts
+                    and
                     _text(c.get("gender_confidence")).lower() == "confirmed"
                 )
                 g = (
@@ -121,6 +145,7 @@ class Analyzer(Agent):
                     if c.get("gender") and gender_is_confirmed
                     else ""
                 )
-                note = f"，{c.get('note')}" if c.get("note") else ""
+                detail = c.get("note") if include_character_facts else c.get("voice")
+                note = f"，{detail}" if detail else ""
                 lines.append(f"  - {c.get('target', c.get('source',''))}({c.get('source','')}{g}{note})")
         return "\n".join(lines)

@@ -507,7 +507,7 @@ def review(
                 autofix=autofix,
                 resolve_conflicts=auto_resolve,
             )
-    except (IngestError, ImportError, OSError, ValueError) as error:
+    except (IngestError, ImportError, OSError, RuntimeError, ValueError) as error:
         console.print(f"[red]错误：{error}[/]")
         raise typer.Exit(1) from None
 
