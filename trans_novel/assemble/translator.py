@@ -204,17 +204,28 @@ class Translator(Agent):
 
         if policy_rejected:
             try:
-                return self._translate_policy_partition(
-                    sources,
-                    glossary_terms,
-                    style,
-                    context,
-                    book_synopsis,
-                    chapter_digest,
-                    offset=0,
+                stripped_result = self._call_batch(
+                    sources, glossary_terms, "", "", "", "",
                 )
+                self.last_policy_context_fallback_indexes.extend(range(n))
+                return stripped_result
+            except ContentPolicyError:
+                try:
+                    return self._translate_policy_partition(
+                        sources,
+                        glossary_terms,
+                        style,
+                        context,
+                        book_synopsis,
+                        chapter_digest,
+                        offset=0,
+                    )
+                except Exception as error:
+                    raise AlignmentError(
+                        "策略拒绝定位后的最小批次仍翻译失败"
+                    ) from error
             except Exception as error:
-                raise AlignmentError("策略拒绝定位后的最小批次仍翻译失败") from error
+                raise AlignmentError("无未来上下文的批次仍翻译失败") from error
 
         # 兜底：逐段翻译。任一段仍失败时显式中断，保留已落盘
         # 批次供续跑；不能用空字符串占位，否则章节会被错误标记为已完成。
