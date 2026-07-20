@@ -67,9 +67,10 @@ honorific:
   # keep_style: 体现语气（前辈/小X/X君…）; normalize: 按统一规则；drop: 省略
   strategy: keep_style
 
-# ── 标点规范化（统一为简体中文大陆通用全角标点）────────────────────────────
+# ── 标点规范化 ────────────────────────────────────────────────────────────
 punctuation:
   normalize: true
+  quote_style: source # source=沿用源文「」『』风格；zh-cn=统一为“”‘’
 
 # ── 路径 ─────────────────────────────────────────────────────────────────
 paths:
@@ -149,6 +150,7 @@ class Config(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     honorific_strategy: str = "keep_style"
     punctuation_normalize: bool = True  # 译文标点规范化为简体中文通用
+    punctuation_quote_style: Literal["source", "zh-cn"] = "source"
     state_dir: str = "state"
 
     @staticmethod
@@ -203,5 +205,6 @@ class Config(BaseModel):
             output=output,
             honorific_strategy=raw.get("honorific", {}).get("strategy", "keep_style"),
             punctuation_normalize=bool(punct.get("normalize", True)),
+            punctuation_quote_style=punct.get("quote_style", "source"),
             state_dir=raw.get("paths", {}).get("state_dir", "state"),
         )

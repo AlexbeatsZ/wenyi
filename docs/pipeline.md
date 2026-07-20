@@ -35,7 +35,7 @@ The glossary constrains later translation and the final review, but it does not 
 
 - **Segment alignment:** the model must return a JSON array with the same number of items as the input. Wenyi retries mismatched batches and falls back to translating one segment at a time.
 - **Polishing:** improves Chinese fluency while preserving meaning and segment count.
-- **Punctuation normalization:** converts punctuation to common Simplified Chinese full-width conventions.
+- **Punctuation normalization:** normalizes Chinese sentence punctuation; quotes follow the source by default (preserving Japanese `「」『』`) or can be configured as mainland-style `“”‘’`.
 - **Final review:** starts only after every chapter has been translated, so each chapter derives its relevant term snapshot from the completed glossary rather than the glossary state from an earlier chapter. Chapters are divided into contiguous chunks and checked in parallel against fixed final translation and term snapshots; results are merged back in book order. Severe issues are only retranslated when `autofix_severe` is enabled.
 - **Whole-book consistency QA:** checks terminology, references, voice, and punctuation after translation. It reports issues by default without rewriting the text.
 

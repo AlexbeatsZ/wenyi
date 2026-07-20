@@ -718,6 +718,7 @@ class Orchestrator:
                 "title_translator_system",
                 src=self.config.source_lang,
                 tgt=self.config.target_lang,
+                quote_style=self.config.punctuation_quote_style,
                 n=len(titles),
             )
             user = prompts.render(
@@ -887,11 +888,14 @@ class Orchestrator:
             normalized_targets = normalize_zh_segments(
                 translated,
                 [segment.cont for segment in text_segs],
+                quote_style=self.config.punctuation_quote_style,
+                sources=[segment.source for segment in text_segs],
             )
             normalized_targets = restore_zh_dialogue_quotes(
                 [segment.source for segment in text_segs],
                 normalized_targets,
                 [segment.cont for segment in text_segs],
+                quote_style=self.config.punctuation_quote_style,
             )
             for segment, normalized in zip(text_segs, normalized_targets):
                 segment.target = normalized
@@ -1254,7 +1258,16 @@ class Orchestrator:
                 book_synopsis=book_synopsis, chapter_digest=chapter_digest)
             if new_t and not checks.length_flags([seg.source], [new_t]):
                 if self._punctuation_enabled():
-                    new_t = normalize_zh(new_t)
+                    new_t = normalize_zh(
+                        new_t,
+                        quote_style=self.config.punctuation_quote_style,
+                        source_text=seg.source,
+                    )
+                    new_t = restore_zh_dialogue_quotes(
+                        [seg.source],
+                        [new_t],
+                        quote_style=self.config.punctuation_quote_style,
+                    )[0]
                 old_t = seg.target
                 seg.target = new_t
                 for it in seg_issues:

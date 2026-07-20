@@ -75,21 +75,22 @@ uv run trans-novel status book.epub
 
 Changing polishing settings does not automatically rerun translation batches that are already complete. Final review has its own persisted state and can be repeated independently with `review --force`; use a new state directory or remove the corresponding state only when you intentionally want a fresh translation.
 
-### Repairing dialogue quotes in existing state
+### Repairing quote style in existing state
 
-The current pipeline deterministically restores Chinese outer `“”` when a
-model drops the boundaries of a complete Japanese `「...」` logical paragraph.
-For existing state, preview the repair before applying it with a full automatic
-backup:
+With the default `punctuation.quote_style: source`, new translations preserve
+Japanese `「」『』` and deterministically restore dropped outer quote boundaries.
+For existing state, preview the migration before applying it with a full
+automatic backup:
 
 ```bash
 uv run python scripts/repair_dialogue_quotes.py "state/book-name"
 uv run python scripts/repair_dialogue_quotes.py "state/book-name" --apply
 ```
 
-The script changes no translated words. It only repairs complete outer dialogue
-boundaries and leaves embedded quotations and book-title marks alone. `--apply`
-backs up the entire run under
+The script changes no translated words. It converts paired curly quotes to the
+source corner-quote style and repairs complete `「」` or `『』` logical paragraph
+boundaries. Add `--quote-style zh-cn` to select mainland-style curly quotes.
+`--apply` backs up the entire run under
 `%LOCALAPPDATA%\Temp\.agents\wenyi-quote-repair-*` before writing.
 
 ## Independent stages and glossary management

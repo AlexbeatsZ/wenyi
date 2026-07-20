@@ -16,7 +16,8 @@
 - 手机端浏览器 QA 发现窄屏下手动查询按钮会被挤压，已为按钮设置固定宽度；390×844 视口下章节切换、查询和字号切换均正常。
 - Antigravity CLI 1.0.x 没有单次原生 system prompt 参数；参考 OpenClaw 的适配方式，应将角色内容折叠为一条普通 `--print` 提示词，并明确这不是安全隔离边界。
 - 本机 agy 1.0.13 的 `--model` 要求 `Gemini 3.5 Flash (Medium)` 这类显示名；OpenClaw 风格的短 ID 需要在 provider 内映射。agy 不返回 token usage，只能明确记录字符估算值。
-- Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复外层中文 `“”`。
+- Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
+- 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
 # Task Board
 
@@ -36,3 +37,6 @@
 - [x] 修改前完整备份 state；脚本修复与 4 条 Gemini 定点修复合计实际变更 44 章、597 个 target，其他字段和非章节状态文件未变。
 - [x] 新增 source-aware 对话引号兜底、强化翻译提示词和 dry-run/apply 修复脚本；修复后边界违规与外层双引号不平衡均为 0。
 - [x] 相关 16 项测试通过；完整测试 244 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
+- [x] 新增 `punctuation.quote_style`：默认 `source`，翻译/润色/标题提示词和确定性后处理统一沿用 `「」『』`；保留 `zh-cn` 可选项。
+- [x] 对《屈曲ラヴァー》现有状态完整备份后迁移：137 个章节文件中已译 14,636 段，8,908 个 target 改为直角引号；仅 target 字段变化，已译逻辑段边界违规为 0，未译 2,093 段保持为空。
+- [ ] 全书仍有 2,093 个空 target（从 ch126 后段起）；当前无运行中的 Wenyi/agy 进程，需用户决定何时断点续译。

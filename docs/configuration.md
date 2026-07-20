@@ -238,6 +238,7 @@ honorific:
 
 punctuation:
   normalize: true
+  quote_style: source
 
 paths:
   state_dir: state
@@ -246,5 +247,6 @@ paths:
 - `max_chars_per_batch`: approximate source-character budget for one model translation request.
 - `max_chars_per_segment`: threshold for splitting an exceptionally long source paragraph.
 - `honorific.strategy`: Japanese-source honorific policy: `keep_style`, `normalize`, or `drop`.
-- `punctuation.normalize`: normalize output to common full-width Simplified Chinese punctuation.
+- `punctuation.normalize`: normalize Chinese sentence punctuation, ellipses, and dashes to full-width forms.
+- `punctuation.quote_style`: `source` (default) follows the source typography, preserving `「」『』` in Japanese novels; `zh-cn` converts quotes to `“”‘’`.
 - `state_dir`: location of checkpoints, chapter files, the glossary database, usage data, and reports.

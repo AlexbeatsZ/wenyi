@@ -11,6 +11,7 @@ import zipfile
 from trans_novel.config import Config
 from trans_novel.agents.langprofile import honorific_rule
 from trans_novel.postprocess.punct import (
+    apply_source_quote_style,
     normalize_zh,
     normalize_zh_segments,
     restore_zh_dialogue_quotes,
@@ -96,6 +97,25 @@ class TestPunct(unittest.TestCase):
         self.assertEqual(normalize_zh("「你好」"), "“你好”")
         self.assertEqual(normalize_zh("『书名』"), "‘书名’")
 
+    def test_source_style_preserves_corner_quotes(self):
+        self.assertEqual(
+            normalize_zh(
+                "“你好，‘朋友’”",
+                quote_style="source",
+                source_text="「こんにちは、『友よ』」",
+            ),
+            "「你好，『朋友』」",
+        )
+
+    def test_source_style_does_not_change_english_apostrophe(self):
+        self.assertEqual(
+            apply_source_quote_style(
+                ["「Jamesの本」"],
+                ["“James’ book”"],
+            ),
+            ["「James’ book」"],
+        )
+
     def test_halfwidth_to_full_in_cjk(self):
         self.assertEqual(normalize_zh("他说,真的吗?"), "他说，真的吗？")
 
@@ -137,6 +157,16 @@ class TestPunct(unittest.TestCase):
             ["“欢迎光临——！”", "“已经有左边”"],
         )
 
+    def test_restores_source_corner_dialogue_style(self):
+        self.assertEqual(
+            restore_zh_dialogue_quotes(
+                ["「いらっしゃいませー！」", "『胸中の声』"],
+                ["“欢迎光临——！”", "‘心声’"],
+                quote_style="source",
+            ),
+            ["「欢迎光临——！」", "『心声』"],
+        )
+
     def test_restores_dialogue_boundaries_across_split_continuations(self):
         self.assertEqual(
             restore_zh_dialogue_quotes(
@@ -144,7 +174,7 @@ class TestPunct(unittest.TestCase):
                 ["很长的", "一段对话", "“回忆中的对话”"],
                 [False, True, False],
             ),
-            ["“很长的", "一段对话”", "“回忆中的对话”"],
+            ["“很长的", "一段对话”", "‘回忆中的对话’"],
         )
 
     def test_does_not_treat_embedded_title_marks_as_outer_dialogue(self):

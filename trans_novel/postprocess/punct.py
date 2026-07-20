@@ -1,7 +1,8 @@
-"""译文标点规范化 —— 统一为简体中文大陆通用全角标点。
+"""中文译文标点规范化。
 
 确定性兜底（提示词已要求，这里再保一道）：
-- 日式引号 「」→ “”，『』→ ‘’；
+- ``quote_style=source`` 时，源文以 「」『』 为主就沿用直角引号；
+- ``quote_style=zh-cn`` 时，日式引号 「」→ “”，『』→ ‘’；
 - 英式直引号 "→ “/”（按出现次序配对），' → ‘/’（按次序配对，撇号尽量保留）；
 - 半角 , . ! ? : ; 在中文语境（相邻为 CJK）→ 全角 ，。！？：；；
 - 连续点号 ... / 。。。 / ・・・ → ……；-- 或 — → ——。
@@ -13,6 +14,9 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
+
+QuoteStyle = Literal["source", "zh-cn"]
 
 _CJK = (
     "一-鿿"      # CJK 统一汉字
@@ -31,10 +35,13 @@ def _convert_quotes(
     *,
     double_open: bool = True,
     single_open: bool = True,
+    preserve_corner: bool = False,
 ) -> tuple[str, bool, bool]:
     """转换日式和 ASCII 引号，并返回处理后的单双引号开闭状态。"""
-    # 日式引号直接映射
-    text = text.translate(str.maketrans({"「": "“", "」": "”", "『": "‘", "』": "’"}))
+    if not preserve_corner:
+        text = text.translate(
+            str.maketrans({"「": "“", "」": "”", "『": "‘", "』": "’"})
+        )
 
     # 英式直双引号：按出现次序交替配对 → “ ”
     out = []
@@ -108,6 +115,7 @@ def _normalize_with_quote_state(
     *,
     double_open: bool,
     single_open: bool,
+    preserve_corner: bool = False,
 ) -> tuple[str, bool, bool]:
     """在给定引号状态下完成一段规范化，并返回新的状态。"""
     if not text:
@@ -116,6 +124,7 @@ def _normalize_with_quote_state(
         text,
         double_open=double_open,
         single_open=single_open,
+        preserve_corner=preserve_corner,
     )
     text = _convert_ellipsis_dash(text)
     text = _convert_halfwidth(text)
@@ -124,19 +133,61 @@ def _normalize_with_quote_state(
     return text, double_open, single_open
 
 
-def normalize_zh(text: str) -> str:
+def _source_prefers_corner_quotes(sources: list[str]) -> bool:
+    """源文出现直角引号时，视为作者选择了 「」『』 排版体系。"""
+    return any(any(mark in source for mark in "「」『』") for source in sources)
+
+
+def _curly_to_corner(text: str) -> str:
+    """把中文弯引号改为直角引号；不把英文词内撇号误当成右引号。"""
+    text = text.translate(str.maketrans({"“": "「", "”": "」"}))
+    out: list[str] = []
+    single_open = False
+    for ch in text:
+        if ch == "‘":
+            out.append("『")
+            single_open = True
+        elif ch == "’" and single_open:
+            out.append("』")
+            single_open = False
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def apply_source_quote_style(sources: list[str], targets: list[str]) -> list[str]:
+    """若源文采用直角引号，把译文成对弯引号统一为同一排版风格。"""
+    if len(sources) != len(targets):
+        raise ValueError("sources 与 targets 数量必须一致")
+    if not _source_prefers_corner_quotes(sources):
+        return list(targets)
+    return [_curly_to_corner(target) for target in targets]
+
+
+def normalize_zh(
+    text: str,
+    *,
+    quote_style: QuoteStyle = "zh-cn",
+    source_text: str = "",
+) -> str:
     """把一段中文译文的标点规范化为简体中文通用全角标点。"""
     normalized, _, _ = _normalize_with_quote_state(
         text,
         double_open=True,
         single_open=True,
+        preserve_corner=quote_style == "source",
     )
+    if quote_style == "source" and _source_prefers_corner_quotes([source_text]):
+        normalized = _curly_to_corner(normalized)
     return normalized
 
 
 def normalize_zh_segments(
     texts: list[str],
     continuations: list[bool] | None = None,
+    *,
+    quote_style: QuoteStyle = "zh-cn",
+    sources: list[str] | None = None,
 ) -> list[str]:
     """按逻辑原段规范化标点，只在 cont=True 的切分续段间传递状态。
 
@@ -146,6 +197,8 @@ def normalize_zh_segments(
         continuations = [False] * len(texts)
     if len(continuations) != len(texts):
         raise ValueError("texts 与 continuations 数量必须一致")
+    if sources is not None and len(sources) != len(texts):
+        raise ValueError("sources 与 texts 数量必须一致")
 
     normalized: list[str] = []
     double_open = True
@@ -158,8 +211,11 @@ def normalize_zh_segments(
             text,
             double_open=double_open,
             single_open=single_open,
+            preserve_corner=quote_style == "source",
         )
         normalized.append(value)
+    if quote_style == "source" and sources is not None:
+        normalized = apply_source_quote_style(sources, normalized)
     return normalized
 
 
@@ -167,12 +223,13 @@ def restore_zh_dialogue_quotes(
     sources: list[str],
     targets: list[str],
     continuations: list[bool] | None = None,
+    *,
+    quote_style: QuoteStyle = "zh-cn",
 ) -> list[str]:
-    """依据日文逻辑段边界补回模型遗漏的中文外层对话引号。
+    """依据源文逻辑段边界补回模型遗漏的外层对话引号。
 
-    只处理由 ``「`` 开头并由 ``」`` 结尾的完整逻辑段；``cont=True`` 的
-    切分续段视为同一逻辑段。嵌入叙述中的引语和 ``『』`` 不机械改写，避免
-    破坏中文书名号或模型已经做出的合理层级转换。
+    只处理由 ``「」`` 或 ``『』`` 包住的完整逻辑段；``cont=True`` 的切分
+    续段视为同一逻辑段。``source`` 沿用源文直角引号，``zh-cn`` 转为弯引号。
     """
     if continuations is None:
         continuations = [False] * len(targets)
@@ -189,14 +246,30 @@ def restore_zh_dialogue_quotes(
             source = "".join(group_sources).strip()
             first = restored[group_start]
             last = restored[boundary - 1]
-            is_complete_dialogue = source.startswith("「") and source.endswith("」")
-            if is_complete_dialogue and first.strip() and last.strip():
+            source_pair = next(
+                (
+                    pair
+                    for pair in (("「", "」"), ("『", "』"))
+                    if source.startswith(pair[0]) and source.endswith(pair[1])
+                ),
+                None,
+            )
+            if source_pair and first.strip() and last.strip():
+                desired_pair = (
+                    source_pair
+                    if quote_style == "source"
+                    else (("“", "”") if source_pair == ("「", "」") else ("‘", "’"))
+                )
                 leading = first[: len(first) - len(first.lstrip())]
-                if not first.lstrip().startswith("“"):
-                    restored[group_start] = leading + "“" + first.lstrip()
+                first_body = first.lstrip()
+                if first_body.startswith(("“", "「", "‘", "『")):
+                    first_body = first_body[1:]
+                restored[group_start] = leading + desired_pair[0] + first_body
                 last = restored[boundary - 1]
                 trailing = last[len(last.rstrip()) :]
-                if not last.rstrip().endswith("”"):
-                    restored[boundary - 1] = last.rstrip() + "”" + trailing
+                last_body = last.rstrip()
+                if last_body.endswith(("”", "」", "’", "』")):
+                    last_body = last_body[:-1]
+                restored[boundary - 1] = last_body + desired_pair[1] + trailing
         group_start = boundary
     return restored

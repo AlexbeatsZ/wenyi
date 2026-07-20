@@ -18,18 +18,36 @@ from string import Template
 from ..glossary.store import GlossaryTerm
 from . import langprofile
 
-# 译文标点统一规范（简体中文大陆通用），翻译/润色提示词共用。
-PUNCT_RULE = (
+_PUNCT_COMMON = (
     "在不违反当前任务其它明确格式要求的前提下，保留输入文本中标点与符号的结构作用；"
     "除句号、逗号等普通句读可按中文语序调整外，引号、括号、问号、叹号、冒号、分号、"
     "破折号、省略号、间隔号、波浪号、斜杠、星号、音符及其他特殊符号均不得遗漏，"
     "并保持其位置、层级、数量、重复形式和配对关系。"
+)
+
+PUNCT_RULE_ZH_CN = _PUNCT_COMMON + (
     "标点务必转换为简体中文大陆通用全角形式：句读用 ，。！？：；、，"
     "引号用 “”‘’，省略号用 ……，破折号用 ——；"
     "不得使用半角标点，也不要保留日式「」『』或英式直引号。"
     "若一个输入逻辑段以日式「开头并以」结尾，译文必须以中文“开头并以”结尾；"
     "即使语境已经能辨认说话人，也绝不可省略这对外层对话引号。"
 )
+
+PUNCT_RULE_SOURCE = _PUNCT_COMMON + (
+    "普通句读使用中文全角形式（，。！？：；、，省略号用 ……，破折号用 ——）；"
+    "引号样式必须服从原文：原文使用直角引号「」和双直角引号『』时，译文也原样沿用，"
+    "外层、内层不得互换，不得改成弯引号“”‘’，也不得因中文语境已经清楚而省略。"
+    "若一个输入逻辑段以「开头并以」结尾，译文必须同样以「开头并以」结尾；"
+    "若以『开头并以』结尾，也必须原样保持。"
+)
+
+# 兼容外部导入；默认采用本项目推荐的“跟随原文”策略。
+PUNCT_RULE = PUNCT_RULE_SOURCE
+
+
+def punctuation_rule(quote_style: str) -> str:
+    """按配置返回翻译、润色与标题翻译共用的引号规则。"""
+    return PUNCT_RULE_ZH_CN if quote_style == "zh-cn" else PUNCT_RULE_SOURCE
 
 # ── 默认模板 ───────────────────────────────────────────────────────────────
 TRANSLATOR_SYSTEM = Template("""\
@@ -293,7 +311,14 @@ _DEFAULTS = {
     "book_synopsis_user": BOOK_SYNOPSIS_USER,
 }
 
-def render(name: str, *, src: str = "ja", tgt: str = "zh", **kwargs) -> str:
+def render(
+    name: str,
+    *,
+    src: str = "ja",
+    tgt: str = "zh",
+    quote_style: str = "source",
+    **kwargs,
+) -> str:
     """渲染内置模板；按 src 自动注入语言相关默认占位。"""
     tmpl = _DEFAULTS[name]
     # 语言相关默认值（调用方可用同名 kwarg 覆盖）
@@ -301,7 +326,7 @@ def render(name: str, *, src: str = "ja", tgt: str = "zh", **kwargs) -> str:
     kwargs.setdefault("tgt_label", langprofile.label(tgt))
     kwargs.setdefault("lang_guidance", langprofile.translate_guidance(src))
     kwargs.setdefault("term_guidance", langprofile.term_guidance(src))
-    kwargs.setdefault("punct_rule", PUNCT_RULE)
+    kwargs.setdefault("punct_rule", punctuation_rule(quote_style))
     return tmpl.safe_substitute(**kwargs)
 
 

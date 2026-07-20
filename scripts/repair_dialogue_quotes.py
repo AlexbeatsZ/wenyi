@@ -1,4 +1,4 @@
-"""修复既有 Wenyi 状态中被模型遗漏的外层中文对话引号。"""
+"""修复既有 Wenyi 状态中的对话引号，并可沿用源文直角引号样式。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from trans_novel.postprocess.punct import restore_zh_dialogue_quotes
+from trans_novel.postprocess.punct import (
+    QuoteStyle,
+    apply_source_quote_style,
+    restore_zh_dialogue_quotes,
+)
 
 
 def _chapter_index(path: Path) -> int:
@@ -41,7 +45,12 @@ def _atomic_write_json(path: Path, payload: dict, temp_root: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def repair_run(run_dir: Path, *, apply: bool) -> tuple[int, int, Path | None]:
+def repair_run(
+    run_dir: Path,
+    *,
+    apply: bool,
+    quote_style: QuoteStyle = "source",
+) -> tuple[int, int, Path | None]:
     """扫描或修复一个运行目录，返回章节数、segment 数和备份路径。"""
     run_dir = run_dir.expanduser().resolve()
     chapters_dir = run_dir / "chapters"
@@ -55,7 +64,17 @@ def repair_run(run_dir: Path, *, apply: bool) -> tuple[int, int, Path | None]:
         sources = [str(segment.get("source") or "") for segment in segments]
         targets = [str(segment.get("target") or "") for segment in segments]
         continuations = [bool(segment.get("cont")) for segment in segments]
-        restored = restore_zh_dialogue_quotes(sources, targets, continuations)
+        styled = (
+            apply_source_quote_style(sources, targets)
+            if quote_style == "source"
+            else targets
+        )
+        restored = restore_zh_dialogue_quotes(
+            sources,
+            styled,
+            continuations,
+            quote_style=quote_style,
+        )
         changes = [
             (index, before, after)
             for index, (before, after) in enumerate(zip(targets, restored))
@@ -92,7 +111,7 @@ def repair_run(run_dir: Path, *, apply: bool) -> tuple[int, int, Path | None]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="依据日文 source 边界补回模型遗漏的中文外层对话引号。"
+        description="依据 source 补回对话引号，并按配置沿用「」『』或转换为“”‘’。"
     )
     parser.add_argument("run_dir", type=Path, help="包含 manifest.json 的状态目录")
     parser.add_argument(
@@ -100,8 +119,14 @@ def main() -> None:
         action="store_true",
         help="创建完整备份后写回；省略时仅 dry-run",
     )
+    parser.add_argument(
+        "--quote-style",
+        choices=("source", "zh-cn"),
+        default="source",
+        help="source=沿用源文直角引号（默认）；zh-cn=使用大陆式弯引号",
+    )
     args = parser.parse_args()
-    repair_run(args.run_dir, apply=args.apply)
+    repair_run(args.run_dir, apply=args.apply, quote_style=args.quote_style)
 
 
 if __name__ == "__main__":

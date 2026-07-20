@@ -44,6 +44,8 @@ class TestConfigFileCreation(unittest.TestCase):
             self.assertEqual(cfg.pipeline.backtranslate_sample, 0.0)
             self.assertFalse(cfg.pipeline.consistency_qa)
             self.assertEqual(cfg.pipeline.review_concurrency, 4)
+            self.assertEqual(cfg.punctuation_quote_style, "source")
+            self.assertIn("  quote_style: source", generated)
 
     def test_load_never_overwrites_existing_config(self):
         with tempfile.TemporaryDirectory() as d:
@@ -73,6 +75,11 @@ class TestConfigFileCreation(unittest.TestCase):
         cfg = Config.from_dict({"output": {"about_page": False}})
 
         self.assertFalse(cfg.output.about_page)
+
+    def test_mainland_quote_style_can_be_selected(self):
+        cfg = Config.from_dict({"punctuation": {"quote_style": "zh-cn"}})
+
+        self.assertEqual(cfg.punctuation_quote_style, "zh-cn")
 
     def test_compatible_reasoning_style_is_loaded(self):
         cfg = Config.from_dict(

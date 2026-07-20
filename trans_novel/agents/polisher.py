@@ -18,7 +18,10 @@ class Polisher(Agent):
         if not targets:
             return []
         n = len(targets)
-        system = prompts.render("polisher_system", src=self.src, tgt=self.tgt, n=n)
+        system = prompts.render(
+            "polisher_system", src=self.src, tgt=self.tgt, n=n,
+            quote_style=self.config.punctuation_quote_style,
+        )
         user = prompts.render(
             "polisher_user", src=self.src, tgt=self.tgt,
             glossary=prompts.render_glossary(glossary_terms or []),

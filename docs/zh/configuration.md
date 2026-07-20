@@ -246,6 +246,7 @@ honorific:
 
 punctuation:
   normalize: true
+  quote_style: source
 
 paths:
   state_dir: state
@@ -254,5 +255,6 @@ paths:
 - `max_chars_per_batch`：单个模型翻译批次的目标字符数。
 - `max_chars_per_segment`：超长段落的拆分阈值。
 - `honorific.strategy`：日语源文本的敬称处理策略，可选 `keep_style`、`normalize`、`drop`。
-- `punctuation.normalize`：统一简体中文大陆常用全角标点。
+- `punctuation.normalize`：统一中文全角句读、省略号和破折号。
+- `punctuation.quote_style`：`source`（默认）跟随源文引号风格；日文小说的 `「」『』` 会在译文中保留。设为 `zh-cn` 时统一使用大陆式 `“”‘’`。
 - `state_dir`：断点、章节产物、术语库和报告的位置。

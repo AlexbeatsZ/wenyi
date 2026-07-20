@@ -81,7 +81,7 @@ class TestOrchestrator(unittest.TestCase):
                 segment for segment in chapter.text_segments
                 if segment.source == "「いらっしゃいませー！」"
             )
-            self.assertEqual(dialogue.target, "“欢迎光临——！”")
+            self.assertEqual(dialogue.target, "「欢迎光临——！」")
 
     def test_prepare_retries_after_analysis_failure(self):
         with tempfile.TemporaryDirectory() as d:

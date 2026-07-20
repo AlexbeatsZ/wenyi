@@ -32,6 +32,7 @@ class Translator(Agent):
         n = len(sources)
         system = prompts.render(
             "translator_system", src=self.src, tgt=self.tgt,
+            quote_style=self.config.punctuation_quote_style,
             lang_guidance=langprofile.translate_guidance(
                 self.src, self.config.honorific_strategy),
         )
@@ -81,6 +82,7 @@ class Translator(Agent):
         """
         system = prompts.render(
             "translator_system", src=self.src, tgt=self.tgt,
+            quote_style=self.config.punctuation_quote_style,
             lang_guidance=langprofile.translate_guidance(
                 self.src, self.config.honorific_strategy),
         )
