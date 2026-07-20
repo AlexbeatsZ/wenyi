@@ -10,7 +10,7 @@
 - API key 只通过环境变量传入，不能写入 `config.yaml` 或其他 Git 跟踪文件。
 - 若要确保整条流水线只使用一个模型，必须同时覆盖 `strong`、`cheap`、`fast` 三个档位。
 - 项目没有固定的 `light_novel` 配置枚举；本次按用户要求不手工覆盖风格，由 `prepare` 根据原文自动生成风格指南。
-- 本地 GitHub 身份 `AlexbeatsZ` 对上游 `BigDawnGhost/wenyi` 无写权限；本次提交保留在本地 `main`，推送返回 HTTP 403。
+- 自有修改应推送到 fork：`origin` 为 `AlexbeatsZ/wenyi`，`upstream` 为官方 `BigDawnGhost/wenyi`；不要向官方仓库直接推送，也不要未经用户要求创建 PR。
 - 翻译中的章节 JSON 会保留在 `state/<书名>/chapters`；局域网阅读器只读这些文件，不修改、不锁定，也不删除翻译状态。
 - 阅读页每 60 秒读取一次全书进度；仅当当前章节的文件修订时间发生变化时重载正文，并提供手动查询按钮。
 - 手机端浏览器 QA 发现窄屏下手动查询按钮会被挤压，已为按钮设置固定宽度；390×844 视口下章节切换、查询和字号切换均正常。
@@ -26,8 +26,8 @@
 - [ ] 翻译完成后检查 `output` 目录中的中文 EPUB；可用 `trans-novel status` 随时查看进度，同一命令可断点续跑。
 - [x] 新增 `reader` 局域网移动阅读器：暗色排版、每分钟自动查询、手动查询、章节导航、字号调节和原文对照开关。
 - [x] 阅读器通过 3 项自动测试及 390×844 手机视口交互检查；不会干扰后台翻译。
-- [x] 已创建本地提交；上游推送因仓库写权限不足而失败，本地提交暂未同步到 `origin/main`。
+- [x] 已创建 `AlexbeatsZ/wenyi` fork；3 个自有提交无冲突变基到 fork 的官方 v0.3.3 基线并推送到 `origin/main`，保留本地备份分支 `backup/pre-fork-rebase-20260720`。
 - [x] 新增 `agy`/`agy-cli` provider：普通提示词传输、JSON 输出约束、短模型 ID 映射、串行调用与文档。
 - [x] agy provider 离线相关测试 39 项通过；真实普通翻译和 `complete_json()` 烟测均通过。
-- [x] 完整测试 219 项通过；仅 2 项既有 Windows `/tmp/output` 路径断言失败，与本次修改无关。
-- [x] agy provider 已提交到本地 `main`；推送 `origin/main` 再次因 `AlexbeatsZ` 对 `BigDawnGhost/wenyi` 无写权限返回 HTTP 403。
+- [x] 变基官方 v0.3.3 后完整测试 240 项通过；仅 2 项既有 Windows `/tmp/output` 路径断言失败，与本次修改无关。
+- [x] agy provider 已推送到 `AlexbeatsZ/wenyi:main`；未创建 PR。
