@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from trans_novel.llm.json_parser import parse_json_loose
+from trans_novel.llm.json_parser import JSONParseError, parse_json_loose
 from trans_novel.llm.providers.fake import FakeClient
 
 
@@ -20,7 +20,7 @@ class TestParseJsonLoose(unittest.TestCase):
         self.assertEqual(parse_json_loose(text), ["译文1", "译文2"])
 
     def test_failure(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(JSONParseError):
             parse_json_loose("没有任何 JSON 内容")
 
 
@@ -65,6 +65,20 @@ class TestFakeClient(unittest.TestCase):
             c.complete_json([{"role": "user", "content": "x"}]), ["A", "B"]
         )
         self.assertEqual(len(c.calls), 2)
+
+    def test_complete_json_retries_invalid_response_with_stricter_prompt(self):
+        responses = iter(['{"issues":[', '{"issues":[]}'])
+        client = FakeClient(handler=lambda _m, _t, _j: next(responses))
+
+        result = client.complete_json(
+            [{"role": "user", "content": "输出 issues JSON"}]
+        )
+
+        self.assertEqual(result, {"issues": []})
+        self.assertEqual(len(client.calls), 2)
+        retry_prompt = client.calls[1]["messages"][-1]["content"]
+        self.assertIn("上一轮返回的 JSON 无效", retry_prompt)
+        self.assertIn("完整闭合", retry_prompt)
 
 
 class TestParseJsonLooseRepairs(unittest.TestCase):

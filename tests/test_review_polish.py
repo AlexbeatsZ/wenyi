@@ -63,6 +63,38 @@ class TestReviewer(unittest.TestCase):
         self.assertEqual([it["index"] for it in issues], [0, 1])
         self.assertEqual([it["detail"] for it in issues], ["甲", "乙"])
 
+    def test_invalid_json_retries_then_recursively_splits_review_chunk(self):
+        """整块连续返回坏 JSON 时二分；子块成功后索引仍映射到原章。"""
+        def handler(messages, tier, json_mode):
+            user = "\n".join(message["content"] for message in messages)
+            count = len(re.findall(r"^\[\d+\] 原文：", user, re.M))
+            if count > 1:
+                return '{"issues":['
+            return json.dumps({"issues": [{
+                "index": 0,
+                "type": "missing",
+                "detail": "单段恢复",
+            }]}, ensure_ascii=False)
+
+        cfg = _cfg()
+        cfg.segment.max_chars_per_batch = 1000
+        cfg.pipeline.review_concurrency = 1
+        client = FakeClient(handler=handler)
+        orch = Orchestrator(cfg, client=client)
+        segments = [
+            Segment(index=0, source="源文甲", target="译文甲"),
+            Segment(index=1, source="源文乙", target="译文乙"),
+        ]
+
+        issues = orch._review_chapter(segments, [])
+
+        self.assertEqual([it["index"] for it in issues], [0, 1])
+        review_calls = [
+            call for call in client.calls
+            if "译文审校" in call["messages"][0]["content"]
+        ]
+        self.assertEqual(len(review_calls), 4)  # 原块两次 + 两个单段
+
 
 class TestPolisher(unittest.TestCase):
     def test_polish_ok(self):

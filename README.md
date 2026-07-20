@@ -44,6 +44,10 @@ model arbitrate unresolved glossary candidates from local source/translation
 context before reviewing the body text. Severe review fixes also use the main
 model; `translation_llm` remains the first-draft client.
 
+Malformed structured responses are retried once with a stricter JSON reminder.
+If review or glossary arbitration still cannot parse the response, Wenyi
+recursively splits that chunk and preserves the original chapter/term order.
+
 ## Supported formats and output
 
 - Input: EPUB, FB2, TXT, Markdown, HTML, and PDF.

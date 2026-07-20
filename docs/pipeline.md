@@ -38,6 +38,7 @@ The glossary constrains later translation and the final review, but it does not 
 - **Content-policy fallback:** an explicit rejection is retried and then localized per segment. Only a still-rejected segment is refined by `translation_llm`; other segments remain on the main model.
 - **Punctuation normalization:** normalizes Chinese sentence punctuation; quotes follow the source by default (preserving Japanese `「」『』`) or can be configured as mainland-style `“”‘’`.
 - **Final review:** starts only after every chapter has been translated. When configured, the main model first arbitrates unresolved glossary candidates from local source/translation context. Each chapter then derives its relevant term snapshot from that completed glossary. Chapters are divided into contiguous chunks and checked in parallel; severe fixes use the same main model directly from the review feedback when `autofix_severe` is enabled.
+- **Structured-output recovery:** malformed JSON is retried in a fresh request with a stricter, concise schema reminder. Repeated failures recursively split review chunks or glossary batches; a glossary batch is not written until all recursive sub-batches validate.
 - **Whole-book consistency QA:** checks terminology, references, voice, and punctuation after translation. It reports issues by default without rewriting the text.
 
 Final review is disabled by default. Setting `pipeline.review: true` inserts it

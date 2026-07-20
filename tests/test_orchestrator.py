@@ -595,6 +595,61 @@ class TestReviewReporting(unittest.TestCase):
             self.assertTrue(seen_review_prompt)
             self.assertTrue(any("堀北 → 堀北" in prompt for prompt in seen_review_prompt))
 
+    def test_incomplete_glossary_decisions_retry_then_split_without_partial_write(self):
+        """整批漏项时先重试再二分，全部子批有效后才关闭冲突。"""
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.auto_resolve_glossary_conflicts = True
+            arbiter_batch_sizes: list[int] = []
+
+            def handler(messages, tier, json_mode):
+                system = messages[0]["content"]
+                user = messages[-1]["content"]
+                if "术语冲突裁定" in system:
+                    sources = re.findall(r'"source": "([^"]+)"', user)
+                    arbiter_batch_sizes.append(len(sources))
+                    chosen = sources[:1]  # 多项批次故意漏项；单项批次完整
+                    return json.dumps({"decisions": [
+                        {"source": source, "target": source + "定译", "reason": "测试"}
+                        for source in chosen
+                    ]}, ensure_ascii=False)
+                if "译文审校" in system:
+                    return json.dumps({"issues": []}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            client = FakeClient(handler=handler)
+            orch = Orchestrator(cfg, client=client)
+            store = orch.run(txt)
+            glossary = GlossaryStore(store.glossary_path)
+            try:
+                for source, existing, proposed in (
+                    ("堀北", "堀北", "掘北"),
+                    ("綾小路", "绫小路", "绫小路君"),
+                ):
+                    glossary.upsert_term(
+                        GlossaryTerm(source=source, target=existing, type="人物")
+                    )
+                    glossary.upsert_term(
+                        GlossaryTerm(source=source, target=proposed, type="人物"),
+                        chapter=1,
+                    )
+            finally:
+                glossary.close()
+
+            result = orch.run_review(txt, autofix=False)
+
+            glossary = GlossaryStore(store.glossary_path)
+            try:
+                self.assertEqual(glossary.open_conflicts(), [])
+                self.assertEqual(glossary.get_term("堀北").target, "堀北定译")
+                self.assertEqual(glossary.get_term("綾小路").target, "綾小路定译")
+            finally:
+                glossary.close()
+            self.assertEqual(result["glossary_conflicts_resolved"], 2)
+            self.assertEqual(arbiter_batch_sizes, [2, 2, 1, 1])
+
     def test_autofix_off_reports_only(self):
         """autofix 关：仅上报 fixed=False，正文不动。"""
         with tempfile.TemporaryDirectory() as d:

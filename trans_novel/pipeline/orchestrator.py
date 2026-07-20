@@ -28,6 +28,7 @@ from ..glossary import resolver as glossary_resolver
 from ..glossary.store import GlossaryStore
 from ..llm.base import LLMClient
 from ..llm.factory import build_client, build_client_from_llm
+from ..llm.json_parser import JSONParseError
 from ..llm.usage import merge_usage_summaries, usage_delta
 from ..ingest.segmenter import load_document, batch_segments
 from ..postprocess.punct import (
@@ -107,6 +108,10 @@ class _BatchResult:
     targets: list[str]
     bt_samples: list[tuple[str, str]] = field(default_factory=list)
     policy_fallback_indexes: list[int] = field(default_factory=list)
+
+
+class _GlossaryDecisionError(ValueError):
+    """术语裁定 JSON 可解析但缺项、重复或包含非法 source。"""
 
 
 class Orchestrator:
@@ -1039,6 +1044,7 @@ class Orchestrator:
     _SEVERE_TYPES = ("missing", "mistranslation")
     _REVIEW_SCHEMA_VERSION = 2
     _GLOSSARY_ARBITER_BATCH_CHARS = 4500
+    _GLOSSARY_DECISION_ATTEMPTS = 2
 
     @staticmethod
     def _trim_context(text: str, limit: int = 180) -> str:
@@ -1140,6 +1146,60 @@ class Orchestrator:
         items = self._glossary_conflict_items(store, glossary)
         if not items:
             return 0
+
+        def validate_decisions(
+            batch: list[dict[str, Any]],
+            decisions: list[dict[str, Any]],
+        ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+            """验证 source 一一覆盖并按输入顺序返回；不在此处写数据库。"""
+            expected = {item["source"] for item in batch}
+            by_source: dict[str, dict[str, Any]] = {}
+            invalid: list[str] = []
+            for decision in decisions:
+                source = str(decision.get("source", "") or "").strip()
+                target = str(decision.get("target", "") or "").strip()
+                if source not in expected or not target or source in by_source:
+                    invalid.append(source or "<empty>")
+                    continue
+                by_source[source] = decision
+            missing = sorted(expected - set(by_source))
+            if missing or invalid:
+                details: list[str] = []
+                if missing:
+                    details.append("缺少 " + "、".join(missing))
+                if invalid:
+                    details.append("非法或重复 " + "、".join(invalid))
+                raise _GlossaryDecisionError(
+                    "Gemini 术语裁定不完整：" + "；".join(details)
+                )
+            return [(item, by_source[item["source"]]) for item in batch]
+
+        def decide_resilient(
+            batch: list[dict[str, Any]],
+        ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+            """漏项先重试；解析连续失败或仍漏项时递归二分。"""
+            last_error: ValueError | None = None
+            for attempt in range(self._GLOSSARY_DECISION_ATTEMPTS):
+                try:
+                    decisions = self.glossary_arbiter.decide(batch)
+                    return validate_decisions(batch, decisions)
+                except JSONParseError as error:
+                    # complete_json 已使用新请求重试；直接缩小输出规模。
+                    last_error = error
+                    break
+                except _GlossaryDecisionError as error:
+                    last_error = error
+                    if attempt + 1 < self._GLOSSARY_DECISION_ATTEMPTS:
+                        continue
+            if len(batch) > 1:
+                midpoint = len(batch) // 2
+                return (
+                    decide_resilient(batch[:midpoint])
+                    + decide_resilient(batch[midpoint:])
+                )
+            assert last_error is not None
+            raise last_error
+
         batches = self._pack_glossary_conflicts(items)
         resolved = 0
         for batch_no, batch in enumerate(batches, 1):
@@ -1149,23 +1209,10 @@ class Orchestrator:
                     len(items),
                     f"Gemini 裁定术语冲突：{batch_no}/{len(batches)} 批",
                 )
-            decisions = self.glossary_arbiter.decide(batch)
-            expected = {item["source"] for item in batch}
-            by_source: dict[str, dict[str, Any]] = {}
-            for decision in decisions:
-                source = str(decision.get("source", "") or "").strip()
-                target = str(decision.get("target", "") or "").strip()
-                if source in expected and target and source not in by_source:
-                    by_source[source] = decision
-            missing = sorted(expected - set(by_source))
-            if missing:
-                raise ValueError(
-                    "Gemini 未完整裁定术语冲突：" + "、".join(missing)
-                )
-            # 整批响应验证通过后再逐项落库，避免半批有效、半批缺失。
-            for item in batch:
+            validated = decide_resilient(batch)
+            # 原始批次及其全部递归子批均验证通过后再落库，避免部分裁定。
+            for item, decision in validated:
                 source = item["source"]
-                decision = by_source[source]
                 target = str(decision["target"]).strip()
                 if not glossary_resolver.resolve(glossary, source, target):
                     raise ValueError(f"术语冲突对应词条不存在：{source}")
@@ -1393,8 +1440,19 @@ class Orchestrator:
             chunk_base, chunk = job
             srcs = [s.source for s in chunk]
             tgts = [s.target or "" for s in chunk]
+            try:
+                raw_issues = self.reviewer.review(srcs, tgts, terms)
+            except JSONParseError:
+                # complete_json 已带强化提示重试；继续失败时缩小输出规模。
+                if len(chunk) <= 1:
+                    raise
+                midpoint = len(chunk) // 2
+                return (
+                    review_one((chunk_base, chunk[:midpoint]))
+                    + review_one((chunk_base + midpoint, chunk[midpoint:]))
+                )
             chunk_issues: list[dict] = []
-            for it in self.reviewer.review(srcs, tgts, terms):
+            for it in raw_issues:
                 idx = it.get("index")
                 if isinstance(idx, str):
                     try:

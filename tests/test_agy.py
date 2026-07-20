@@ -237,6 +237,23 @@ class TestAgyClient(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
 
     @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_complete_json_retries_malformed_json_in_fresh_session(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, '{"issues":[', ""),
+            subprocess.CompletedProcess([], 0, '{"issues":[]}', ""),
+        ]
+        client = AgyClient(_config().llm)
+
+        result = client.complete_json(
+            [{"role": "user", "content": "输出 issues JSON"}],
+            tier="cheap",
+        )
+
+        self.assertEqual(result, {"issues": []})
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("上一轮返回的 JSON 无效", run.call_args_list[1].args[0][-1])
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
     def test_raises_typed_error_after_persistent_policy_rejection(self, run):
         rejected = (
             "The prompt could not be submitted. The prompt contains sensitive "

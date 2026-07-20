@@ -7,6 +7,10 @@ import re
 from typing import Any
 
 
+class JSONParseError(ValueError):
+    """模型回复无法恢复为完整 JSON；调用层可据此安全重试或拆批。"""
+
+
 def _repair_unescaped_quotes(text: str) -> str:
     """转义 JSON 字符串值内部未转义的 ASCII 双引号。
 
@@ -103,4 +107,8 @@ def parse_json_loose(text: str) -> Any:
             return json.loads(_repair_unescaped_quotes(candidate))
         except Exception:
             continue
-    raise ValueError(f"无法解析为 JSON：{text[:200]!r}")
+    tail = text[-160:] if len(text) > 160 else text
+    raise JSONParseError(
+        f"无法解析为 JSON（回复 {len(text)} 字符）："
+        f"开头 {text[:160]!r}；结尾 {tail!r}"
+    )
