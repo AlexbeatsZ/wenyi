@@ -12,6 +12,7 @@ from __future__ import annotations
 from ..agents import langprofile, prompts
 from ..agents.base import Agent
 from ..glossary.store import GlossaryTerm
+from ..llm.base import ContentPolicyError
 
 
 class AlignmentError(Exception):
@@ -59,8 +60,21 @@ class Translator(Agent):
     def _translate_one(self, source, glossary_terms, style, context,
                        book_synopsis, chapter_digest) -> str:
         """借用批量协议翻译单段，作为批量对齐失败后的最终兜底。"""
-        out = self._call_batch([source], glossary_terms, style, context,
-                               book_synopsis, chapter_digest)
+        self._last_call_used_policy_context_fallback = False
+        try:
+            out = self._call_batch(
+                [source], glossary_terms, style, context,
+                book_synopsis, chapter_digest,
+            )
+        except ContentPolicyError:
+            # A policy rejection can be caused by the combination of a benign
+            # current sentence with spoiler-heavy whole-book/chapter context.
+            # Retry only this segment with stable terminology; Pro polishing
+            # still restores literary context after the initial translation.
+            out = self._call_batch(
+                [source], glossary_terms, "", "", "", "",
+            )
+            self._last_call_used_policy_context_fallback = True
         return out[0]
 
     def retranslate_with_feedback(
@@ -115,6 +129,8 @@ class Translator(Agent):
     ) -> list[str]:
         """翻译一批源段，返回与之等长的译文列表。"""
         glossary_terms = glossary_terms or []
+        self.last_policy_context_fallback_indexes: list[int] = []
+        self._last_call_used_policy_context_fallback = False
         n = len(sources)
         if n == 0:
             return []
@@ -138,16 +154,17 @@ class Translator(Agent):
         targets: list[str] = []
         for index, source in enumerate(sources):
             try:
-                targets.append(
-                    self._translate_one(
-                        source,
-                        glossary_terms,
-                        style,
-                        context,
-                        book_synopsis,
-                        chapter_digest,
-                    )
+                translated = self._translate_one(
+                    source,
+                    glossary_terms,
+                    style,
+                    context,
+                    book_synopsis,
+                    chapter_digest,
                 )
+                targets.append(translated)
+                if self._last_call_used_policy_context_fallback:
+                    self.last_policy_context_fallback_indexes.append(index)
             except Exception as error:
                 raise AlignmentError(f"逐段兜底翻译在第 {index} 段失败") from error
         return targets

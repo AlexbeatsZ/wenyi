@@ -9,6 +9,7 @@ import unittest
 from trans_novel.config import Config
 from trans_novel.agents import prompts
 from trans_novel.llm.providers.fake import FakeClient
+from trans_novel.llm.base import ContentPolicyError
 from trans_novel.agents.translator import Translator
 from trans_novel.pipeline.checks import length_flags
 
@@ -78,6 +79,35 @@ class TestTranslatorAlignment(unittest.TestCase):
 
         with self.assertRaisesRegex(Exception, "第 0 段失败"):
             translator.translate_batch(["あ"])
+
+    def test_policy_rejected_single_segment_retries_without_future_context(self):
+        def handler(messages, tier, json_mode):
+            user = messages[-1]["content"]
+            if "后文身份反转" in user:
+                raise ContentPolicyError("policy rejected combined context")
+            n = _count_segments(user)
+            return json.dumps(
+                {"translations": ["保守完成的初译" for _ in range(n)]},
+                ensure_ascii=False,
+            )
+
+        client = FakeClient(handler=handler)
+        translator = Translator(client, self._config())
+
+        result = translator.translate_batch(
+            ["当前原文"],
+            style="完整风格",
+            context="最近译文",
+            book_synopsis="后文身份反转",
+            chapter_digest="本章结局",
+        )
+
+        self.assertEqual(result, ["保守完成的初译"])
+        self.assertEqual(translator.last_policy_context_fallback_indexes, [0])
+        fallback_user = client.calls[-1]["messages"][-1]["content"]
+        self.assertNotIn("后文身份反转", fallback_user)
+        self.assertNotIn("本章结局", fallback_user)
+        self.assertIn("当前原文", fallback_user)
 
 class TestTranslatorPromptOrder(unittest.TestCase):
     def test_static_chapter_digest_precedes_dynamic_glossary(self):

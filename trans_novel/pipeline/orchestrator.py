@@ -1625,7 +1625,9 @@ class Orchestrator:
             sources, glossary_terms=terms, style=style, context=ctx_text,
             book_synopsis=book_synopsis, chapter_digest=chapter_digest)
 
-        policy_fallback_indexes: list[int] = []
+        policy_fallback_indexes = list(
+            self.translator.last_policy_context_fallback_indexes
+        )
         refinement_failed_indexes: list[int] = []
         if self.config.pipeline.polish:
             polished = self.polisher.polish(
@@ -1639,9 +1641,10 @@ class Orchestrator:
             )
             if len(polished) == len(targets):
                 targets = polished
-            policy_fallback_indexes = list(
-                self.polisher.last_policy_fallback_indexes
-            )
+            policy_fallback_indexes = sorted(set(
+                policy_fallback_indexes
+                + self.polisher.last_policy_fallback_indexes
+            ))
             refinement_failed_indexes = list(
                 self.polisher.last_failed_indexes
             )
