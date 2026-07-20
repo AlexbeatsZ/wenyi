@@ -10,7 +10,11 @@ import zipfile
 
 from trans_novel.config import Config
 from trans_novel.agents.langprofile import honorific_rule
-from trans_novel.postprocess.punct import normalize_zh, normalize_zh_segments
+from trans_novel.postprocess.punct import (
+    normalize_zh,
+    normalize_zh_segments,
+    restore_zh_dialogue_quotes,
+)
 from trans_novel.llm.providers.fake import FakeClient
 from trans_novel.pipeline.orchestrator import Orchestrator
 from tests.sample_data import write_sample_txt
@@ -121,6 +125,36 @@ class TestPunct(unittest.TestCase):
                 [False, False],
             ),
             ["“缺少右引号", "“新的完整对话”"],
+        )
+
+    def test_restores_outer_dialogue_quotes_dropped_by_model(self):
+        self.assertEqual(
+            restore_zh_dialogue_quotes(
+                ["「いらっしゃいませー！」", "「片边已有」"],
+                ["欢迎光临——！", "“已经有左边"],
+                [False, False],
+            ),
+            ["“欢迎光临——！”", "“已经有左边”"],
+        )
+
+    def test_restores_dialogue_boundaries_across_split_continuations(self):
+        self.assertEqual(
+            restore_zh_dialogue_quotes(
+                ["「很长的", "一段对话」", "『回忆中的对话』"],
+                ["很长的", "一段对话", "“回忆中的对话”"],
+                [False, True, False],
+            ),
+            ["“很长的", "一段对话”", "“回忆中的对话”"],
+        )
+
+    def test_does_not_treat_embedded_title_marks_as_outer_dialogue(self):
+        self.assertEqual(
+            restore_zh_dialogue_quotes(
+                ["『hidden desires』という曲が流れた。"],
+                ["播放了《hidden desires》这首歌。"],
+                [False],
+            ),
+            ["播放了《hidden desires》这首歌。"],
         )
 
     def test_continuation_flags_must_align_with_texts(self):

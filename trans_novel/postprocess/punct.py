@@ -161,3 +161,42 @@ def normalize_zh_segments(
         )
         normalized.append(value)
     return normalized
+
+
+def restore_zh_dialogue_quotes(
+    sources: list[str],
+    targets: list[str],
+    continuations: list[bool] | None = None,
+) -> list[str]:
+    """依据日文逻辑段边界补回模型遗漏的中文外层对话引号。
+
+    只处理由 ``「`` 开头并由 ``」`` 结尾的完整逻辑段；``cont=True`` 的
+    切分续段视为同一逻辑段。嵌入叙述中的引语和 ``『』`` 不机械改写，避免
+    破坏中文书名号或模型已经做出的合理层级转换。
+    """
+    if continuations is None:
+        continuations = [False] * len(targets)
+    if len(sources) != len(targets) or len(continuations) != len(targets):
+        raise ValueError("sources、targets 与 continuations 数量必须一致")
+
+    restored = list(targets)
+    group_start = 0
+    for boundary in range(1, len(targets) + 1):
+        if boundary < len(targets) and continuations[boundary]:
+            continue
+        group_sources = sources[group_start:boundary]
+        if group_sources:
+            source = "".join(group_sources).strip()
+            first = restored[group_start]
+            last = restored[boundary - 1]
+            is_complete_dialogue = source.startswith("「") and source.endswith("」")
+            if is_complete_dialogue and first.strip() and last.strip():
+                leading = first[: len(first) - len(first.lstrip())]
+                if not first.lstrip().startswith("“"):
+                    restored[group_start] = leading + "“" + first.lstrip()
+                last = restored[boundary - 1]
+                trailing = last[len(last.rstrip()) :]
+                if not last.rstrip().endswith("”"):
+                    restored[boundary - 1] = last.rstrip() + "”" + trailing
+        group_start = boundary
+    return restored

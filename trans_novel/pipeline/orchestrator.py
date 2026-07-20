@@ -29,7 +29,11 @@ from ..llm.base import LLMClient
 from ..llm.factory import build_client
 from ..llm.usage import merge_usage_summaries, usage_delta
 from ..ingest.segmenter import load_document, batch_segments
-from ..postprocess.punct import normalize_zh, normalize_zh_segments
+from ..postprocess.punct import (
+    normalize_zh,
+    normalize_zh_segments,
+    restore_zh_dialogue_quotes,
+)
 from ..agents.analyzer import Analyzer
 from ..agents.synopsis import Synopsizer
 from ..agents.translator import Translator
@@ -882,6 +886,11 @@ class Orchestrator:
             translated = [segment.target or "" for segment in text_segs]
             normalized_targets = normalize_zh_segments(
                 translated,
+                [segment.cont for segment in text_segs],
+            )
+            normalized_targets = restore_zh_dialogue_quotes(
+                [segment.source for segment in text_segs],
+                normalized_targets,
                 [segment.cont for segment in text_segs],
             )
             for segment, normalized in zip(text_segs, normalized_targets):

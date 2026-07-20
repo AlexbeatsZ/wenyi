@@ -16,6 +16,7 @@
 - 手机端浏览器 QA 发现窄屏下手动查询按钮会被挤压，已为按钮设置固定宽度；390×844 视口下章节切换、查询和字号切换均正常。
 - Antigravity CLI 1.0.x 没有单次原生 system prompt 参数；参考 OpenClaw 的适配方式，应将角色内容折叠为一条普通 `--print` 提示词，并明确这不是安全隔离边界。
 - 本机 agy 1.0.13 的 `--model` 要求 `Gemini 3.5 Flash (Medium)` 这类显示名；OpenClaw 风格的短 ID 需要在 provider 内映射。agy 不返回 token usage，只能明确记录字符估算值。
+- Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复外层中文 `“”`。
 
 # Task Board
 
@@ -31,3 +32,7 @@
 - [x] agy provider 离线相关测试 39 项通过；真实普通翻译和 `complete_json()` 烟测均通过。
 - [x] 变基官方 v0.3.3 后完整测试 240 项通过；仅 2 项既有 Windows `/tmp/output` 路径断言失败，与本次修改无关。
 - [x] agy provider 已推送到 `AlexbeatsZ/wenyi:main`；未创建 PR。
+- [x] 定位《屈曲ラヴァー》引号问题：爬虫/ingest/阅读器均未丢引号；已翻译 target 存在大批外层对话引号遗漏。
+- [x] 修改前完整备份 state；脚本修复与 4 条 Gemini 定点修复合计实际变更 44 章、597 个 target，其他字段和非章节状态文件未变。
+- [x] 新增 source-aware 对话引号兜底、强化翻译提示词和 dry-run/apply 修复脚本；修复后边界违规与外层双引号不平衡均为 0。
+- [x] 相关 16 项测试通过；完整测试 244 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。

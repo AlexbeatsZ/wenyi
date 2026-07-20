@@ -75,6 +75,20 @@ uv run trans-novel status book.epub
 
 更改润色设置不会自动重跑已经完成的翻译批次。最终审校拥有独立的持久化状态，可通过 `review --force` 单独重跑；只有需要从头翻译时才应使用新的状态目录或清理对应状态。
 
+### 修复旧状态中遗漏的对话引号
+
+新版流水线会依据日文 source 的逻辑段边界，确定性补回模型遗漏的中文外层
+`“”`。已有状态可先 dry-run，再在自动完整备份后写回：
+
+```bash
+uv run python scripts/repair_dialogue_quotes.py "state/书名"
+uv run python scripts/repair_dialogue_quotes.py "state/书名" --apply
+```
+
+脚本只处理以 `「` 开头、以 `」` 结尾的完整逻辑对话段，不改译文字词，也不
+机械改写嵌入叙述中的引语或书名号。`--apply` 会先把整个运行目录备份到
+`%LOCALAPPDATA%\Temp\.agents\wenyi-quote-repair-*`。
+
 ## 独立阶段与术语管理
 
 ```bash

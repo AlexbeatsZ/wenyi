@@ -46,6 +46,43 @@ def _config(state_dir: str):
 
 
 class TestOrchestrator(unittest.TestCase):
+    def test_pipeline_restores_outer_dialogue_quotes_dropped_by_models(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = os.path.join(directory, "dialogue.txt")
+            with open(source_path, "w", encoding="utf-8") as file:
+                file.write("# 第一章\n\n「いらっしゃいませー！」\n")
+            cfg = _config(os.path.join(directory, "state"))
+            cfg.pipeline.review = False
+            cfg.pipeline.consistency_qa = False
+            cfg.pipeline.book_understanding = False
+
+            def handler(messages, tier, json_mode):
+                system = messages[0]["content"]
+                user = messages[-1]["content"]
+                if "文学翻译" in system:
+                    count = len(re.findall(r"^\[(\d+)\]", user, re.M))
+                    return json.dumps(
+                        {"translations": ["欢迎光临——！"] * count},
+                        ensure_ascii=False,
+                    )
+                if "中文润色编辑" in system:
+                    count = len(re.findall(r"^\[(\d+)\]", user, re.M))
+                    return json.dumps(
+                        {"polished": ["欢迎光临——！"] * count},
+                        ensure_ascii=False,
+                    )
+                return routing_handler(messages, tier, json_mode)
+
+            store = Orchestrator(cfg, client=FakeClient(handler=handler)).run(
+                source_path
+            )
+            chapter = store.load_chapter(0)
+            dialogue = next(
+                segment for segment in chapter.text_segments
+                if segment.source == "「いらっしゃいませー！」"
+            )
+            self.assertEqual(dialogue.target, "“欢迎光临——！”")
+
     def test_prepare_retries_after_analysis_failure(self):
         with tempfile.TemporaryDirectory() as d:
             txt = os.path.join(d, "novel.txt")
