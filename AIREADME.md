@@ -99,5 +99,6 @@
 - [x] 二分前先尝试整批移除未来/章节上下文：若成功则判定为组合上下文触发并直接交给 Pro 精修；只有无上下文仍拒绝才二分正文触发点。覆盖上下文型与正文型两类复现，Translator/Orchestrator 52 项通过。
 - [x] Pro 精修增加同构的整批上下文判别：完整上下文策略拒绝后，先由 Pro 保留原文/初译/术语并移除未来概览重试；仍拒绝才逐段定位或使用 Flash 备用。Translator/Polisher/Orchestrator 60 项通过。
 - [x] 无未来上下文初译若仅发生 JSON/数组对齐错误，不再错误终止；保持无剧透上下文递归二分并恢复 1:1，对第 2 话实测 35 段返回 34 段的故障建立回归。相关测试 61 项通过。
+- [x] 第 2 话真实续跑完成 95 段：首批 40 段复用，第二批 35 段组合上下文 fallback 后由 Flash 整批初译、Pro 整批精修，失败索引为空；末批 20 段正常路径完成。章节术语无冲突，新增仅 `アンパンマン/チョモランマ/マック` 等合理条目。
 - [ ] 后续架构深化：新增 NarrativeKnowledge Module，将稳定译名与时序人物事实拆分，并按 chapter/segment 的 `visible_from` 生成 Translator、Polisher、Reviewer、autofix、Consistency 共用视图。
 - [ ] 从干净重建状态第 2 章继续 Flash Medium 初译 + Pro High 精修；完成后由 Pro High 审校并抽取高风险章节复核。
