@@ -152,6 +152,36 @@ class TestPolisher(unittest.TestCase):
         self.assertEqual(polisher.last_policy_fallback_indexes, [1])
         self.assertEqual(polisher.last_failed_indexes, [])
 
+    def test_context_only_policy_rejection_retries_whole_polish_batch(self):
+        def handler(messages, tier, json_mode):
+            user = messages[-1]["content"]
+            if "后文身份反转" in user:
+                raise ContentPolicyError("policy rejected combined context")
+            count = len(re.findall(r"^\[(\d+)\]", user, re.M))
+            return json.dumps(
+                {"polished": [f"Pro精修{i}" for i in range(count)]},
+                ensure_ascii=False,
+            )
+
+        client = FakeClient(handler=handler)
+        polisher = Polisher(client, _cfg())
+
+        result = polisher.polish(
+            ["初译一", "初译二", "初译三"],
+            sources=["原文一", "原文二", "原文三"],
+            context="最近译文",
+            book_synopsis="后文身份反转",
+            chapter_digest="本章结局",
+        )
+
+        self.assertEqual(result, ["Pro精修0", "Pro精修1", "Pro精修2"])
+        self.assertEqual(polisher.last_policy_context_fallback_indexes, [0, 1, 2])
+        self.assertEqual(polisher.last_policy_fallback_indexes, [])
+        self.assertEqual(len(client.calls), 2)
+        retry_user = client.calls[-1]["messages"][-1]["content"]
+        self.assertNotIn("后文身份反转", retry_user)
+        self.assertNotIn("本章结局", retry_user)
+
 
 class TestBackTranslator(unittest.TestCase):
     def test_check(self):

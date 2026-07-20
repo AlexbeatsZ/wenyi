@@ -135,6 +135,7 @@ class Polisher(Agent):
             return []
         sources = list(sources or [""] * len(targets))
         self.last_failed_indexes = []
+        self.last_policy_context_fallback_indexes: list[int] = []
         if len(sources) != len(targets):
             self.last_failed_indexes = list(range(len(targets)))
             return list(targets)
@@ -153,6 +154,27 @@ class Polisher(Agent):
                 stage="Polisher",
             )
         except ContentPolicyError:
+            try:
+                result = self._call(
+                    self.client,
+                    targets,
+                    sources=sources,
+                    glossary_terms=terms,
+                    style=style,
+                    context="",
+                    book_synopsis="",
+                    chapter_digest="",
+                    stage="PolisherContextFallback",
+                )
+            except ContentPolicyError:
+                result = None
+            except Exception:
+                result = None
+            if result is not None:
+                self.last_policy_context_fallback_indexes = list(
+                    range(len(targets))
+                )
+                return result
             return self._polish_after_policy_rejection(
                 targets,
                 sources=sources,

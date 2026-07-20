@@ -1643,6 +1643,7 @@ class Orchestrator:
                 targets = polished
             policy_fallback_indexes = sorted(set(
                 policy_fallback_indexes
+                + self.polisher.last_policy_context_fallback_indexes
                 + self.polisher.last_policy_fallback_indexes
             ))
             refinement_failed_indexes = list(
