@@ -456,6 +456,11 @@ def review(
         "--fix/--no-fix",
         help="覆盖 pipeline.autofix_severe；开启后串行修复漏译和误译",
     ),
+    resolve_conflicts: Optional[bool] = typer.Option(
+        None,
+        "--resolve-conflicts/--no-resolve-conflicts",
+        help="覆盖 pipeline.auto_resolve_glossary_conflicts；审校前由主模型裁定术语冲突",
+    ),
 ):
     """使用最终术语库审校完整译文；结果按章保存，可断点续审。"""
     from .pipeline.orchestrator import Orchestrator
@@ -463,6 +468,11 @@ def review(
     _require_input_file(input)
     config = _load_config()
     autofix = config.pipeline.autofix_severe if fix is None else fix
+    auto_resolve = (
+        config.pipeline.auto_resolve_glossary_conflicts
+        if resolve_conflicts is None
+        else resolve_conflicts
+    )
     orch = Orchestrator(config)
 
     try:
@@ -495,6 +505,7 @@ def review(
                 progress=cb,
                 force=force,
                 autofix=autofix,
+                resolve_conflicts=auto_resolve,
             )
     except (IngestError, ImportError, OSError, ValueError) as error:
         console.print(f"[red]错误：{error}[/]")
@@ -505,6 +516,9 @@ def review(
         f"[bold green]全书审校完成[/]：发现 {len(issues)} 项问题"
         f"{'，已按配置尝试修复严重项' if autofix else ''}。"
     )
+    resolved = result.get("glossary_conflicts_resolved", 0)
+    if resolved:
+        console.print(f"主模型已裁定 {resolved} 个术语冲突。")
     console.print(f"状态目录：{result['store'].run_dir}")
     _print_usage({"usage": result["store"].load_usage() or {}})
 

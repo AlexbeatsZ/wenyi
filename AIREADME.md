@@ -26,7 +26,8 @@
 - Gemini 内容策略拒绝应在 AGY 内用全新会话有限重试；持续拒绝时先逐段定位，只把仍被拒绝的精修段落交给 `translation_llm`，不能让整批静默换模型。
 - AGY 在 Windows 上通过命令行参数接收提示词；标题翻译即使已按 40 项/4000 字分批，若每批仍注入上千条全量术语，也会触发 `CreateProcess` 的 `WinError 206`。标题批次只能注入当前标题实际命中的术语，provider 也应把 206 报为命令行过长而非误报 CLI 缺失。
 - 最终 EPUB 验收不能只确认 ZIP 可打开；还需运行 `7z t`，并核对 OPF manifest 文件均存在、spine idref 均能解析。
-- 本书正文虽已全部翻译，但当前 137 章 `review_status` 均为 `pending`；首次正式审校应先用 `review --no-fix` 只记录问题，生成 `report.json` 人工查看后，再决定是否用 `review --force --fix` 自动改写严重项并重新 assemble。
+- 最终审校的严重项修复属于精修阶段，必须使用主 `llm`（当前 AGY Gemini），不能复用只负责初译的 `translation_llm`；修复器直接根据审校意见定向重译，只保留长度与标点等确定性验收，不再调用 Reviewer 二次审核。
+- 术语冲突可在审校前由主模型自动裁定：先按 source 合并重复冲突，附最多 3 条局部原译文上下文，再按 4500 字符预算分批；模型响应必须覆盖整批所有 source 才落库，不能把不完整输出伪装成已解决。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
 - 台湾教育部横排中文引号规范使用 `「」『』`；日轻翻译可设置 `punctuation.quote_style: source` 跟随原文。后处理应同时统一整章引号样式并修复完整逻辑段边界；英文词内撇号不能机械改成 `』`。
 
@@ -63,4 +64,6 @@
 - [x] 新增 Gemini 内容策略拒绝的 3 次干净会话重试与逐段 DeepSeek 回退；真实验证第 129 章故障段可成功完成两阶段处理。
 - [x] 修复标题翻译 `WinError 206`：每批只注入标题命中的术语，并纠正 AGY 对 Windows 命令行过长的错误提示。
 - [x] `trans-novel status` 将运行状态移动到章节表格和术语统计之后，便于直接查看最后一行。
-- [ ] 《屈曲ラヴァー》最终审校尚未执行：当前 137/137 章审校均为 pending，术语库另有 122 个未裁定冲突；建议先裁定重要术语，再执行只读审校并查看报告。
+- [x] 审校修复改由主 AGY Gemini 直接根据意见定向重译；DeepSeek `translation_llm` 不再接收审校修复请求，无额外 Reviewer 二审。
+- [x] 新增主模型自动裁定术语冲突：当前配置默认开启，CLI 可用 `--resolve-conflicts/--no-resolve-conflicts` 覆盖；122 条冲突日志实际合并为 54 个术语、6 个安全长度批次。
+- [ ] 《屈曲ラヴァー》最终审校尚未执行：当前 137/137 章审校均为 pending；下一步可直接运行 `review --force --fix`，自动裁定术语后由 Gemini 审校并修复严重项。

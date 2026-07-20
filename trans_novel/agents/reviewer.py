@@ -6,6 +6,7 @@ BackTranslator：把译文回译成源语言，再与原文比对，抽样发现
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from . import langprofile, prompts
@@ -37,6 +38,25 @@ class Reviewer(Agent):
         )
         return self.dict_items(
             self._ask_json(system, user, tier="cheap", key="issues"))
+
+
+class GlossaryArbiter(Agent):
+    """让主模型结合候选译名和正文上下文裁定术语冲突。"""
+
+    def decide(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """返回逐项裁定结果；完整性与 source 合法性由编排器统一校验。"""
+        if not items:
+            return []
+        system = prompts.render("glossary_arbiter_system", src=self.src, tgt=self.tgt)
+        user = prompts.render(
+            "glossary_arbiter_user",
+            src=self.src,
+            tgt=self.tgt,
+            items=json.dumps(items, ensure_ascii=False, indent=2),
+        )
+        return self.dict_items(
+            self._ask_json(system, user, tier="cheap", key="decisions")
+        )
 
 
 class BackTranslator(Agent):

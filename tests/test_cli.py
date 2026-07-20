@@ -259,8 +259,9 @@ class TestCliConfig(unittest.TestCase):
                 captured["input_path"] = input_path
                 captured["kwargs"] = kwargs
                 return {
-                    "store": FakeStore(),
-                    "review_issues": [{"index": 0, "type": "missing"}],
+                "store": FakeStore(),
+                "review_issues": [{"index": 0, "type": "missing"}],
+                "glossary_conflicts_resolved": 2,
                 }
 
         with (
@@ -270,14 +271,22 @@ class TestCliConfig(unittest.TestCase):
         ):
             result = CliRunner().invoke(
                 app,
-                ["review", "input.txt", "--force", "--fix"],
+                [
+                    "review",
+                    "input.txt",
+                    "--force",
+                    "--fix",
+                    "--resolve-conflicts",
+                ],
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(captured["input_path"], "input.txt")
         self.assertTrue(captured["kwargs"]["force"])
         self.assertTrue(captured["kwargs"]["autofix"])
+        self.assertTrue(captured["kwargs"]["resolve_conflicts"])
         self.assertIn("发现 1 项问题", result.output)
+        self.assertIn("裁定 2 个术语冲突", result.output)
 
     def test_translate_missing_input_exits_before_loading_config(self):
         missing = os.path.join(tempfile.gettempdir(), "trans-novel-missing.epub")

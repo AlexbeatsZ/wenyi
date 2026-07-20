@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from trans_novel.config import Config
-from trans_novel.glossary.store import GlossaryStore
+from trans_novel.glossary.store import GlossaryStore, GlossaryTerm
 from trans_novel.llm.providers.fake import FakeClient
 from trans_novel.pipeline.orchestrator import Orchestrator, _normalize_lang
 from trans_novel.pipeline.runstore import (
@@ -61,6 +61,7 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIs(orch.translator.client, deepseek)
         self.assertIs(orch.polisher.client, gemini)
         self.assertIs(orch.polisher.fallback_client, deepseek)
+        self.assertIs(orch.review_fixer.client, gemini)
 
     def test_pipeline_restores_outer_dialogue_quotes_dropped_by_models(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -487,6 +488,112 @@ class TestReviewReporting(unittest.TestCase):
                 )
             finally:
                 glossary.close()
+
+    def test_autofix_uses_main_review_client_not_translation_client(self):
+        """Gemini 审校后的定向修复仍走主 llm，不回落到 DeepSeek 初译客户端。"""
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.autofix_severe = True
+
+            def main_handler(messages, tier, json_mode):
+                system = messages[0]["content"]
+                user = messages[-1]["content"]
+                if "译文审校" in system:
+                    return json.dumps({"issues": [{
+                        "index": 0,
+                        "type": "missing",
+                        "detail": "漏了一句",
+                        "suggestion": "补上",
+                    }]}, ensure_ascii=False)
+                if "文学翻译" in system and "【审校意见】" in user:
+                    return json.dumps(
+                        {"translations": [self.FIX_TEXT]}, ensure_ascii=False
+                    )
+                return routing_handler(messages, tier, json_mode)
+
+            def translation_handler(messages, tier, json_mode):
+                user = messages[-1]["content"]
+                if "【审校意见】" in user:
+                    raise AssertionError("审校修复不应调用 translation_llm")
+                return routing_handler(messages, tier, json_mode)
+
+            gemini = FakeClient(handler=main_handler)
+            deepseek = FakeClient(handler=translation_handler)
+            orch = Orchestrator(
+                cfg,
+                client=gemini,
+                translation_client=deepseek,
+            )
+            orch.run(txt)
+            store = orch.run_review(txt, autofix=True)["store"]
+
+            self.assertEqual(store.load_chapter(0).text_segments[0].target, self.FIX_TEXT)
+            self.assertTrue(any(
+                "【审校意见】" in call["messages"][-1]["content"]
+                for call in gemini.calls
+            ))
+            self.assertFalse(any(
+                "【审校意见】" in call["messages"][-1]["content"]
+                for call in deepseek.calls
+            ))
+
+    def test_review_auto_resolves_glossary_conflicts_with_main_client(self):
+        """审校前由主 llm 结合上下文裁定术语，随后审校 prompt 使用最终译名。"""
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.auto_resolve_glossary_conflicts = True
+            seen_review_prompt: list[str] = []
+
+            def handler(messages, tier, json_mode):
+                system = messages[0]["content"]
+                user = messages[-1]["content"]
+                if "术语冲突裁定" in system:
+                    self.assertIn("堀北", user)
+                    self.assertIn("掘北", user)
+                    self.assertIn("逐段上下文", user)
+                    return json.dumps({"decisions": [{
+                        "source": "堀北",
+                        "target": "堀北",
+                        "reason": "固定人物姓名",
+                    }]}, ensure_ascii=False)
+                if "译文审校" in system:
+                    seen_review_prompt.append(user)
+                    return json.dumps({"issues": []}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            client = FakeClient(handler=handler)
+            orch = Orchestrator(cfg, client=client)
+            store = orch.run(txt)
+            glossary = GlossaryStore(store.glossary_path)
+            try:
+                glossary.upsert_term(
+                    GlossaryTerm(source="堀北", target="堀北", type="人物")
+                )
+                self.assertEqual(
+                    glossary.upsert_term(
+                        GlossaryTerm(source="堀北", target="掘北", type="人物"),
+                        chapter=1,
+                    ),
+                    "conflict",
+                )
+            finally:
+                glossary.close()
+
+            result = orch.run_review(txt, autofix=False)
+
+            glossary = GlossaryStore(store.glossary_path)
+            try:
+                self.assertEqual(glossary.open_conflicts(), [])
+                self.assertEqual(glossary.get_term("堀北").target, "堀北")
+            finally:
+                glossary.close()
+            self.assertEqual(result["glossary_conflicts_resolved"], 1)
+            self.assertTrue(seen_review_prompt)
+            self.assertTrue(any("堀北 → 堀北" in prompt for prompt in seen_review_prompt))
 
     def test_autofix_off_reports_only(self):
         """autofix 关：仅上报 fixed=False，正文不动。"""

@@ -142,6 +142,21 @@ $pairs
 请审校并输出 JSON：{"issues":[...]}。\
 """)
 
+GLOSSARY_ARBITER_SYSTEM = Template("""\
+你是长篇小说翻译项目的术语冲突裁定编辑。对每个$src_label原词，结合词条类型、候选中文译名和
+原文/现有译文上下文，选出全书后续统一使用的简体中文译名。优先选择候选中最准确、自然且符合
+人物身份与既有文风的一项；只有候选均明显错误时才提出更合适的译名。不得遗漏、合并或虚构原词，
+每个输入 source 必须恰好返回一次。仅输出 JSON：
+{"decisions":[{"source":"原词","target":"最终译名","reason":"简短理由"}]}。\
+""")
+
+GLOSSARY_ARBITER_USER = Template("""\
+【待裁定术语冲突】
+$items
+
+请逐项裁定并输出 JSON：{"decisions":[...]}。\
+""")
+
 POLISHER_SYSTEM = Template("""\
 你是$src_label小说的中文润色编辑兼精修译者。逐段对照原文和初译，在不改变原意、不增删信息的前提下：
 修正漏译、误译、指代和语气问题，提升中文流畅度与文学性，并结合全书、章节和前文上下文保持衔接。
@@ -304,6 +319,8 @@ _DEFAULTS = {
     "translator_fix_user": TRANSLATOR_FIX_USER,
     "reviewer_system": REVIEWER_SYSTEM,
     "reviewer_user": REVIEWER_USER,
+    "glossary_arbiter_system": GLOSSARY_ARBITER_SYSTEM,
+    "glossary_arbiter_user": GLOSSARY_ARBITER_USER,
     "polisher_system": POLISHER_SYSTEM,
     "polisher_user": POLISHER_USER,
     "title_translator_system": TITLE_TRANSLATOR_SYSTEM,

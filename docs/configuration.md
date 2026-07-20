@@ -219,6 +219,7 @@ untrusted prompts or stronger filesystem isolation are involved.
 pipeline:
   review: false
   autofix_severe: false
+  auto_resolve_glossary_conflicts: false
   polish: true
   backtranslate_sample: 0
   consistency_qa: false
@@ -231,6 +232,7 @@ pipeline:
 
 - `review`: disabled by default; when enabled, automatically run the independent final-review stage after the complete book has been translated. The explicit `trans-novel review` command remains available while this is disabled.
 - `autofix_severe`: during final review, retranslate severe omissions and mistranslations and adopt fixes that pass validation.
+- `auto_resolve_glossary_conflicts`: before final review, let the main model choose final glossary translations from candidates and local source/translation context.
 - `polish`: let the strong model refine each draft against the source and layered context. This may improve quality but significantly increases runtime and cost.
 - `backtranslate_sample`: fraction of translated segments to inspect through backtranslation; `0` disables it.
 - `consistency_qa`: run a final cross-chapter check of terminology, references, voice, and punctuation.
@@ -244,7 +246,8 @@ The command-line flags `--polish`, `--no-polish`, `--qa`, and `--no-qa` override
 
 Run final review independently with `trans-novel review INPUT`. `--force`
 rechecks already reviewed translations, while `--fix` or `--no-fix` overrides
-`autofix_severe` for that invocation.
+`autofix_severe` for that invocation. `--resolve-conflicts` and
+`--no-resolve-conflicts` similarly override `auto_resolve_glossary_conflicts`.
 
 ## Output
 

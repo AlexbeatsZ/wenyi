@@ -52,6 +52,7 @@ segment:
 pipeline:
   review: false # 默认关闭；开启后在全书翻译完成后自动执行最终审校
   autofix_severe: false # 最终审校后自动重译严重项（漏译/误译）；关掉仅上报
+  auto_resolve_glossary_conflicts: false # 审校前由主模型裁定未决术语冲突
   align_retry_limit: 2
   polish: true # 润色（强档）：等于用 pro 把全书再翻一遍，最烧钱；默认开
   backtranslate_sample: 0 # 回译抽检比例（0 关闭）
@@ -118,6 +119,7 @@ class SegmentConfig(BaseModel):
 class PipelineConfig(BaseModel):
     review: bool = False
     autofix_severe: bool = False     # 最终审校后自动重译严重项；关闭则仅上报留人工
+    auto_resolve_glossary_conflicts: bool = False  # 审校前由主模型裁定未决术语冲突
     align_retry_limit: int = 2       # 批次翻译段数不符时的整批重试次数，超限后逐段兜底
     polish: bool = True              # 默认开：润色=用强档把全书再翻一遍，可在配置中关闭以节省成本
     backtranslate_sample: float = 0.0

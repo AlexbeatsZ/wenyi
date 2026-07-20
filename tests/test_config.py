@@ -40,6 +40,7 @@ class TestConfigFileCreation(unittest.TestCase):
             self.assertTrue(cfg.output.about_page)
             self.assertFalse(cfg.pipeline.review)
             self.assertFalse(cfg.pipeline.autofix_severe)
+            self.assertFalse(cfg.pipeline.auto_resolve_glossary_conflicts)
             self.assertTrue(cfg.pipeline.polish)
             self.assertEqual(cfg.pipeline.backtranslate_sample, 0.0)
             self.assertFalse(cfg.pipeline.consistency_qa)
@@ -66,6 +67,7 @@ class TestConfigFileCreation(unittest.TestCase):
 
         self.assertFalse(cfg.pipeline.review)
         self.assertFalse(cfg.pipeline.autofix_severe)
+        self.assertFalse(cfg.pipeline.auto_resolve_glossary_conflicts)
         self.assertTrue(cfg.pipeline.polish)
         self.assertEqual(cfg.pipeline.backtranslate_sample, 0.0)
         self.assertFalse(cfg.pipeline.consistency_qa)

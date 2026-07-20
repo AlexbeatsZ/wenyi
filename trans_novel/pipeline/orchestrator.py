@@ -24,6 +24,7 @@ from typing import Any, Callable, Optional
 
 from ..config import Config
 from ..glossary.extractor import GlossaryExtractor
+from ..glossary import resolver as glossary_resolver
 from ..glossary.store import GlossaryStore
 from ..llm.base import LLMClient
 from ..llm.factory import build_client, build_client_from_llm
@@ -37,7 +38,7 @@ from ..postprocess.punct import (
 from ..agents.analyzer import Analyzer
 from ..agents.synopsis import Synopsizer
 from ..agents.translator import Translator
-from ..agents.reviewer import Reviewer, BackTranslator
+from ..agents.reviewer import Reviewer, BackTranslator, GlossaryArbiter
 from ..agents.polisher import Polisher
 from . import checks
 from .context import RollingContext
@@ -132,7 +133,10 @@ class Orchestrator:
         self.analyzer = Analyzer(self.client, config)
         self.synopsizer = Synopsizer(self.client, config)
         self.translator = Translator(self.translation_client, config)
+        # 最终审校修复属于精修阶段，始终使用主 llm；translation_llm 只负责初译。
+        self.review_fixer = Translator(self.client, config)
         self.reviewer = Reviewer(self.client, config)
+        self.glossary_arbiter = GlossaryArbiter(self.client, config)
         self.backtrans = BackTranslator(self.client, config)
         self.polisher = Polisher(
             self.client,
@@ -193,8 +197,17 @@ class Orchestrator:
                 "请修改 config.yaml 中的 language.source 或 language.target。"
             )
         self.config.source_lang = resolved
-        for ag in (self.analyzer, self.synopsizer, self.translator, self.reviewer,
-                   self.backtrans, self.polisher, self.extractor):
+        for ag in (
+            self.analyzer,
+            self.synopsizer,
+            self.translator,
+            self.review_fixer,
+            self.reviewer,
+            self.glossary_arbiter,
+            self.backtrans,
+            self.polisher,
+            self.extractor,
+        ):
             ag.src = resolved
 
     # ── 准备 / 续跑入口 ──────────────────────────────────────────────────
@@ -1024,7 +1037,149 @@ class Orchestrator:
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation")
-    _REVIEW_SCHEMA_VERSION = 1
+    _REVIEW_SCHEMA_VERSION = 2
+    _GLOSSARY_ARBITER_BATCH_CHARS = 4500
+
+    @staticmethod
+    def _trim_context(text: str, limit: int = 180) -> str:
+        """把冲突裁定上下文压成单行并限制长度，避免 AGY 命令行过长。"""
+        compact = " ".join(str(text or "").split())
+        return compact if len(compact) <= limit else compact[: limit - 1] + "…"
+
+    def _glossary_conflict_items(
+        self,
+        store: RunStore,
+        glossary: GlossaryStore,
+    ) -> list[dict[str, Any]]:
+        """按 source 合并冲突，并附少量逐段上下文供主模型裁定。"""
+        grouped: dict[str, dict[str, Any]] = {}
+        for conflict in glossary.open_conflicts():
+            source = str(conflict.get("source", "") or "").strip()
+            if not source:
+                continue
+            item = grouped.setdefault(
+                source,
+                {"source": source, "candidates": [], "chapters": set()},
+            )
+            for key in ("existing_target", "proposed_target"):
+                target = str(conflict.get(key, "") or "").strip()
+                if target and target not in item["candidates"]:
+                    item["candidates"].append(target)
+            chapter = conflict.get("chapter")
+            if isinstance(chapter, int):
+                item["chapters"].add(chapter)
+
+        if not grouped:
+            return []
+
+        manifest = store.load_manifest()
+        chapters = [
+            store.load_chapter(entry["index"])
+            for entry in manifest.get("chapters", [])
+            if entry.get("status") == STATUS_DONE
+        ]
+        items: list[dict[str, Any]] = []
+        for source, raw in grouped.items():
+            term = glossary.get_term(source)
+            candidates = list(raw["candidates"])
+            if term and term.target and term.target not in candidates:
+                candidates.insert(0, term.target)
+            contexts: list[str] = []
+            for chapter in chapters:
+                for segment in chapter.text_segments:
+                    if source not in segment.source:
+                        continue
+                    contexts.append(
+                        "原文："
+                        + self._trim_context(segment.source)
+                        + "\n译文："
+                        + self._trim_context(segment.target or "")
+                    )
+                    if len(contexts) >= 3:
+                        break
+                if len(contexts) >= 3:
+                    break
+            items.append({
+                "source": source,
+                "type": term.type if term else "术语",
+                "reading": term.reading if term else "",
+                "note": term.note if term else "",
+                "candidates": candidates,
+                "conflict_chapters": sorted(raw["chapters"]),
+                "逐段上下文": contexts,
+            })
+        return items
+
+    def _pack_glossary_conflicts(
+        self,
+        items: list[dict[str, Any]],
+    ) -> list[list[dict[str, Any]]]:
+        """按序和字符预算分批，限制传给 Windows AGY 的提示词长度。"""
+        batches: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        size = 0
+        for item in items:
+            item_size = len(json.dumps(item, ensure_ascii=False))
+            if current and size + item_size > self._GLOSSARY_ARBITER_BATCH_CHARS:
+                batches.append(current)
+                current, size = [], 0
+            current.append(item)
+            size += item_size
+        if current:
+            batches.append(current)
+        return batches
+
+    def _resolve_glossary_conflicts(
+        self,
+        store: RunStore,
+        glossary: GlossaryStore,
+        *,
+        progress: Optional[ProgressFn] = None,
+    ) -> int:
+        """由主模型裁定所有未决术语；无效或不完整响应绝不落库。"""
+        items = self._glossary_conflict_items(store, glossary)
+        if not items:
+            return 0
+        batches = self._pack_glossary_conflicts(items)
+        resolved = 0
+        for batch_no, batch in enumerate(batches, 1):
+            if progress:
+                progress(
+                    resolved,
+                    len(items),
+                    f"Gemini 裁定术语冲突：{batch_no}/{len(batches)} 批",
+                )
+            decisions = self.glossary_arbiter.decide(batch)
+            expected = {item["source"] for item in batch}
+            by_source: dict[str, dict[str, Any]] = {}
+            for decision in decisions:
+                source = str(decision.get("source", "") or "").strip()
+                target = str(decision.get("target", "") or "").strip()
+                if source in expected and target and source not in by_source:
+                    by_source[source] = decision
+            missing = sorted(expected - set(by_source))
+            if missing:
+                raise ValueError(
+                    "Gemini 未完整裁定术语冲突：" + "、".join(missing)
+                )
+            # 整批响应验证通过后再逐项落库，避免半批有效、半批缺失。
+            for item in batch:
+                source = item["source"]
+                decision = by_source[source]
+                target = str(decision["target"]).strip()
+                if not glossary_resolver.resolve(glossary, source, target):
+                    raise ValueError(f"术语冲突对应词条不存在：{source}")
+                resolved += 1
+                store.log_event(
+                    "glossary_conflict_resolved_by_model",
+                    source=source,
+                    target=target,
+                    candidates=item["candidates"],
+                    reason=str(decision.get("reason", "") or ""),
+                )
+        if progress:
+            progress(resolved, len(items), "Gemini 术语冲突裁定完成")
+        return resolved
 
     def _review_digest(self, text_segs, terms, *, autofix: bool) -> str:
         """计算一章审校输入摘要，用于识别可安全跳过的重复审校。
@@ -1066,6 +1221,7 @@ class Orchestrator:
         progress: Optional[ProgressFn] = None,
         force: bool = False,
         autofix: bool | None = None,
+        resolve_conflicts: bool | None = None,
     ) -> list[dict]:
         """使用最终术语库按书序审校全部章节，并逐章持久化结果。
 
@@ -1090,6 +1246,17 @@ class Orchestrator:
         do_autofix = (
             self.config.pipeline.autofix_severe if autofix is None else autofix
         )
+        do_resolve_conflicts = (
+            self.config.pipeline.auto_resolve_glossary_conflicts
+            if resolve_conflicts is None
+            else resolve_conflicts
+        )
+        if do_resolve_conflicts:
+            self._resolve_glossary_conflicts(
+                store,
+                glossary,
+                progress=progress,
+            )
         chapters = manifest.get("chapters", [])
         loaded = {
             item["index"]: store.load_chapter(item["index"])
@@ -1297,7 +1464,7 @@ class Orchestrator:
             feedback = "；".join(
                 f"{it.get('detail', '')}（建议：{it.get('suggestion', '')}）"
                 for it in seg_issues)
-            new_t = self.translator.retranslate_with_feedback(
+            new_t = self.review_fixer.retranslate_with_feedback(
                 seg.source, feedback=feedback, glossary_terms=terms, style=style,
                 context_before=before, context_after=after,
                 book_synopsis=book_synopsis, chapter_digest=chapter_digest)
@@ -1392,6 +1559,7 @@ class Orchestrator:
         progress: Optional[ProgressFn] = None,
         force: bool = False,
         autofix: bool | None = None,
+        resolve_conflicts: bool | None = None,
     ) -> dict[str, Any]:
         """单独执行最终全书审校，返回状态目录和按书序汇总的问题。"""
         store = self._locate_existing_store(input_path, progress=progress)
@@ -1402,17 +1570,24 @@ class Orchestrator:
             )
             glossary = GlossaryStore(store.glossary_path)
             try:
+                conflicts_before = len(glossary.open_conflicts())
                 issues = self._review_book(
                     store,
                     glossary,
                     progress=progress,
                     force=force,
                     autofix=autofix,
+                    resolve_conflicts=resolve_conflicts,
                 )
+                conflicts_after = len(glossary.open_conflicts())
             finally:
                 glossary.close()
                 self._flush_usage(store, scope="review")
-        return {"store": store, "review_issues": issues}
+        return {
+            "store": store,
+            "review_issues": issues,
+            "glossary_conflicts_resolved": conflicts_before - conflicts_after,
+        }
 
     def run_steps(self, input_path: str, steps, *,
                   progress: Optional[ProgressFn] = None,

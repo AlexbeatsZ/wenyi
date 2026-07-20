@@ -39,6 +39,11 @@ uv run trans-novel review book.epub
 uv run trans-novel review book.epub --force --fix
 ```
 
+Set `pipeline.auto_resolve_glossary_conflicts: true` to let the main review
+model arbitrate unresolved glossary candidates from local source/translation
+context before reviewing the body text. Severe review fixes also use the main
+model; `translation_llm` remains the first-draft client.
+
 ## Supported formats and output
 
 - Input: EPUB, FB2, TXT, Markdown, HTML, and PDF.
