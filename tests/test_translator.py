@@ -108,7 +108,34 @@ class TestTranslatorAlignment(unittest.TestCase):
         self.assertNotIn("后文身份反转", fallback_user)
         self.assertNotIn("本章结局", fallback_user)
         self.assertIn("当前原文", fallback_user)
-        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(len(client.calls), 2)
+
+    def test_policy_rejection_is_bisected_instead_of_serializing_every_segment(self):
+        sources = [f"普通段{i}" for i in range(8)]
+        sources[5] = "策略触发段"
+
+        def handler(messages, tier, json_mode):
+            user = messages[-1]["content"]
+            if "策略触发段" in user and "后文身份反转" in user:
+                raise ContentPolicyError("policy rejected combined context")
+            numbered = re.findall(r"^\[\d+\]\s*(.*)$", user, re.M)
+            return json.dumps(
+                {"translations": [f"译：{source}" for source in numbered]},
+                ensure_ascii=False,
+            )
+
+        client = FakeClient(handler=handler)
+        translator = Translator(client, self._config())
+
+        result = translator.translate_batch(
+            sources,
+            book_synopsis="后文身份反转",
+            chapter_digest="本章结局",
+        )
+
+        self.assertEqual(result, [f"译：{source}" for source in sources])
+        self.assertEqual(translator.last_policy_context_fallback_indexes, [5])
+        self.assertLess(len(client.calls), len(sources) + 1)
 
 class TestTranslatorPromptOrder(unittest.TestCase):
     def test_static_chapter_digest_precedes_dynamic_glossary(self):

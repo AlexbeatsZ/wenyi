@@ -77,6 +77,53 @@ class Translator(Agent):
             self._last_call_used_policy_context_fallback = True
         return out[0]
 
+    def _translate_policy_partition(
+        self,
+        sources: list[str],
+        glossary_terms: list[GlossaryTerm],
+        style: str,
+        context: str,
+        book_synopsis: str,
+        chapter_digest: str,
+        *,
+        offset: int,
+    ) -> list[str]:
+        """Bisect a policy-blocked batch and strip context only at the leaf."""
+        if len(sources) == 1:
+            result = self._call_batch(
+                sources, glossary_terms, "", "", "", "",
+            )
+            self.last_policy_context_fallback_indexes.append(offset)
+            return result
+
+        midpoint = len(sources) // 2
+        translated: list[str] = []
+        for part_offset, part in (
+            (offset, sources[:midpoint]),
+            (offset + midpoint, sources[midpoint:]),
+        ):
+            try:
+                result = self._call_batch(
+                    part,
+                    glossary_terms,
+                    style,
+                    context,
+                    book_synopsis,
+                    chapter_digest,
+                )
+            except ContentPolicyError:
+                result = self._translate_policy_partition(
+                    part,
+                    glossary_terms,
+                    style,
+                    context,
+                    book_synopsis,
+                    chapter_digest,
+                    offset=part_offset,
+                )
+            translated.extend(result)
+        return translated
+
     def retranslate_with_feedback(
         self,
         source: str,
@@ -136,6 +183,7 @@ class Translator(Agent):
             return []
 
         attempts = self.config.pipeline.align_retry_limit + 1
+        policy_rejected = False
         for _ in range(attempts):
             try:
                 return self._call_batch(
@@ -148,10 +196,25 @@ class Translator(Agent):
                 )
             except ContentPolicyError:
                 # Replaying the identical batch cannot fix a policy decision;
-                # move immediately to per-segment localisation instead.
+                # locate only the rejected partition by recursive bisection.
+                policy_rejected = True
                 break
             except Exception:
                 pass
+
+        if policy_rejected:
+            try:
+                return self._translate_policy_partition(
+                    sources,
+                    glossary_terms,
+                    style,
+                    context,
+                    book_synopsis,
+                    chapter_digest,
+                    offset=0,
+                )
+            except Exception as error:
+                raise AlignmentError("策略拒绝定位后的最小批次仍翻译失败") from error
 
         # 兜底：逐段翻译。任一段仍失败时显式中断，保留已落盘
         # 批次供续跑；不能用空字符串占位，否则章节会被错误标记为已完成。

@@ -95,5 +95,6 @@
 - [x] 调整保守指代的自然度：无反转/悬念且多条当前线索一致时允许自然使用代词，避免为“安全”刻意增加阅读难度；相关测试增至 66 项通过。
 - [x] 修复第 2 话续跑的组合型策略拒绝：逐段初译仅在 `ContentPolicyError` 后清除未来上下文重试，并记录 `policy_fallback_indexes`；Translator/Orchestrator/Polisher 相关 57 项通过。
 - [x] `ContentPolicyError` 不再按普通 JSON/对齐故障原样重试整批，而是立即进入逐段定位；普通暂态错误仍保留既有重试。Translator/Orchestrator 50 项通过。
+- [x] 策略拒绝定位由全批逐段串行改为递归二分：安全子批保持批译，只在真实触发叶子移除未来上下文；8 段离线复现验证调用数少于逐段路径，Translator/Orchestrator 51 项通过。
 - [ ] 后续架构深化：新增 NarrativeKnowledge Module，将稳定译名与时序人物事实拆分，并按 chapter/segment 的 `visible_from` 生成 Translator、Polisher、Reviewer、autofix、Consistency 共用视图。
 - [ ] 从干净重建状态第 2 章继续 Flash Medium 初译 + Pro High 精修；完成后由 Pro High 审校并抽取高风险章节复核。
