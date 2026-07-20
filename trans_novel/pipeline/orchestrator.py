@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -108,6 +109,7 @@ class _BatchResult:
     targets: list[str]
     bt_samples: list[tuple[str, str]] = field(default_factory=list)
     policy_fallback_indexes: list[int] = field(default_factory=list)
+    refinement_failed_indexes: list[int] = field(default_factory=list)
 
 
 class _GlossaryDecisionError(ValueError):
@@ -390,8 +392,22 @@ class Orchestrator:
     def _sample_text(doc, *, labeled: bool = True) -> str:
         """取风格分析样章。labeled=True 时多点采样（开头/中部/结尾各一段，带中文标注），
         让分析覆盖全书风格全貌；labeled=False 返回单段纯源文（语言检测用，不能混入中文标签）。"""
-        texts = ["\n".join(s.source for s in ch.text_segments) for ch in doc.chapters]
-        texts = [t for t in texts if len(t) > 200]
+        candidates: list[tuple[str, int]] = []
+        for chapter in doc.chapters:
+            sources = [segment.source for segment in chapter.text_segments]
+            text = "\n".join(sources)
+            if len(text) <= 200:
+                continue
+            # EPUB title/metadata/TOC pages can be very long but contain few
+            # narrative sentences. Prefer chapters with several prose/dialogue
+            # segments so the analyzer sees character evidence from real text.
+            narrative_segments = sum(
+                bool(re.search(r"[。！？!?」』]", source)) and len(source) >= 20
+                for source in sources
+            )
+            candidates.append((text, narrative_segments))
+        narrative_texts = [text for text, score in candidates if score >= 4]
+        texts = narrative_texts if narrative_texts else [text for text, _ in candidates]
         if not texts:  # 兜底：全书都是短章
             joined = "\n".join(
                 s.source for ch in doc.chapters[:2] for s in ch.text_segments)
@@ -913,7 +929,12 @@ class Orchestrator:
                 chapter=ci,
                 start_index=batch_start,
                 count=len(b),
-                polished=self.config.pipeline.polish,
+                polish_requested=self.config.pipeline.polish,
+                polished=(
+                    self.config.pipeline.polish
+                    and not res.refinement_failed_indexes
+                ),
+                polish_failed_indexes=res.refinement_failed_indexes,
                 initial_provider=(
                     self.config.translation_llm.provider
                     if self.config.translation_llm is not None
@@ -922,6 +943,25 @@ class Orchestrator:
                 refinement_provider=(
                     self.config.llm.provider
                     if self.config.pipeline.polish
+                    else None
+                ),
+                initial_model=(
+                    (
+                        self.config.translation_llm.tiers.get("strong").model
+                        if self.config.translation_llm.tiers.get("strong") is not None
+                        else None
+                    )
+                    if self.config.translation_llm is not None
+                    else (
+                        self.config.llm.tiers.get("strong").model
+                        if self.config.llm.tiers.get("strong") is not None
+                        else None
+                    )
+                ),
+                refinement_model=(
+                    self.config.llm.tiers.get("strong").model
+                    if self.config.pipeline.polish
+                    and self.config.llm.tiers.get("strong") is not None
                     else None
                 ),
                 policy_fallback_indexes=res.policy_fallback_indexes,
@@ -1042,7 +1082,7 @@ class Orchestrator:
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation")
-    _REVIEW_SCHEMA_VERSION = 2
+    _REVIEW_SCHEMA_VERSION = 3
     _GLOSSARY_ARBITER_BATCH_CHARS = 4500
     _GLOSSARY_DECISION_ATTEMPTS = 2
 
@@ -1236,6 +1276,14 @@ class Orchestrator:
         """
         payload = {
             "version": self._REVIEW_SCHEMA_VERSION,
+            "review_model": {
+                "provider": self.config.llm.provider,
+                "model": (
+                    self.config.llm.tiers.get("cheap").model
+                    if self.config.llm.tiers.get("cheap") is not None
+                    else None
+                ),
+            },
             "source_lang": self.config.source_lang,
             "target_lang": self.config.target_lang,
             "autofix": autofix,
@@ -1578,6 +1626,7 @@ class Orchestrator:
             book_synopsis=book_synopsis, chapter_digest=chapter_digest)
 
         policy_fallback_indexes: list[int] = []
+        refinement_failed_indexes: list[int] = []
         if self.config.pipeline.polish:
             polished = self.polisher.polish(
                 targets,
@@ -1593,6 +1642,9 @@ class Orchestrator:
             policy_fallback_indexes = list(
                 self.polisher.last_policy_fallback_indexes
             )
+            refinement_failed_indexes = list(
+                self.polisher.last_failed_indexes
+            )
 
         bt_samples: list[tuple[str, str]] = []
         rate = self.config.pipeline.backtranslate_sample
@@ -1605,6 +1657,7 @@ class Orchestrator:
             targets=targets,
             bt_samples=bt_samples,
             policy_fallback_indexes=policy_fallback_indexes,
+            refinement_failed_indexes=refinement_failed_indexes,
         )
 
     # ── 可选步骤 / 连续全流程 ────────────────────────────────────────────────

@@ -123,6 +123,7 @@ class TestPolisher(unittest.TestCase):
         p = Polisher(client, _cfg())
         out = p.polish(["甲", "乙"])
         self.assertEqual(out, ["甲", "乙"])  # 段数不符 → 保守保留原译
+        self.assertEqual(p.last_failed_indexes, [0, 1])
 
     def test_policy_rejected_segment_uses_deepseek_fallback_only_for_it(self):
         def gemini_handler(messages, tier, json_mode):
@@ -149,6 +150,7 @@ class TestPolisher(unittest.TestCase):
         self.assertEqual(len(deepseek.calls), 1)
         self.assertIn("拒否対象", deepseek.calls[0]["messages"][-1]["content"])
         self.assertEqual(polisher.last_policy_fallback_indexes, [1])
+        self.assertEqual(polisher.last_failed_indexes, [])
 
 
 class TestBackTranslator(unittest.TestCase):

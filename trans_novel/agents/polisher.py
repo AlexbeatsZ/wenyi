@@ -24,6 +24,7 @@ class Polisher(Agent):
         super().__init__(client, config)
         self.fallback_client = fallback_client
         self.last_policy_fallback_indexes: list[int] = []
+        self.last_failed_indexes: list[int] = []
 
     def _call(
         self,
@@ -113,6 +114,8 @@ class Polisher(Agent):
                         self.last_policy_fallback_indexes.append(index)
             except Exception:
                 result = None
+            if not result:
+                self.last_failed_indexes.append(index)
             polished.append(result[0] if result else target)
         return polished
 
@@ -131,7 +134,9 @@ class Polisher(Agent):
         if not targets:
             return []
         sources = list(sources or [""] * len(targets))
+        self.last_failed_indexes = []
         if len(sources) != len(targets):
+            self.last_failed_indexes = list(range(len(targets)))
             return list(targets)
         terms = glossary_terms or []
         self.last_policy_fallback_indexes = []
@@ -159,4 +164,7 @@ class Polisher(Agent):
             )
         except Exception:
             result = None
-        return result if result is not None else list(targets)
+        if result is None:
+            self.last_failed_indexes = list(range(len(targets)))
+            return list(targets)
+        return result

@@ -784,6 +784,20 @@ class TestReviewReporting(unittest.TestCase):
             )
             self.assertGreater(forced_count, unchanged_count)
 
+    def test_review_digest_changes_when_review_model_changes(self):
+        """切换审校模型后不得把旧模型的审校结果误判为仍然有效。"""
+        from trans_novel.ingest.models import Segment
+
+        cfg = _config("state")
+        orch = Orchestrator(cfg, client=FakeClient(handler=routing_handler))
+        segments = [Segment(index=0, source="原文。", target="译文。")]
+
+        before = orch._review_digest(segments, [], autofix=False)
+        cfg.llm.tiers["cheap"].model = "replacement-review-model"
+        after = orch._review_digest(segments, [], autofix=False)
+
+        self.assertNotEqual(before, after)
+
     def test_review_rejects_incomplete_book(self):
         """独立最终审校要求全书所有章节均已翻译完成。"""
         with tempfile.TemporaryDirectory() as d:
@@ -895,6 +909,49 @@ class TestStyleAnalysis(unittest.TestCase):
             self.assertEqual(sample.count("【开头样章】"), 1)
             self.assertNotIn("【中部样章】", sample)
             self.assertNotIn("【结尾样章】", sample)
+
+    def test_sample_text_skips_long_epub_front_matter(self):
+        """作品信息/目录再长也不应占用开头样章。"""
+        from trans_novel.ingest.models import Chapter, Document, Segment
+
+        front = Chapter(
+            index=0,
+            segments=[
+                Segment(index=0, source="作品情報"),
+                Segment(index=1, source="あらすじ" + "あ" * 1200),
+                *[
+                    Segment(index=i + 2, source=f"00{i:02d} 第{i}話 タイトル (2026-01-01)")
+                    for i in range(20)
+                ],
+            ],
+        )
+        chapters = [front]
+        for chapter_index in range(1, 4):
+            chapters.append(
+                Chapter(
+                    index=chapter_index,
+                    segments=[
+                        Segment(
+                            index=i,
+                            source=f"正文{chapter_index}-{i}。人物が会話を続けている。" + "あ" * 30,
+                        )
+                        for i in range(8)
+                    ],
+                )
+            )
+        doc = Document(
+            title="test",
+            source_lang="ja",
+            target_lang="zh",
+            fmt="epub",
+            chapters=chapters,
+        )
+
+        sample = Orchestrator._sample_text(doc)
+
+        self.assertNotIn("作品情報", sample)
+        self.assertIn("正文1-0", sample)
+
 
     def test_style_brief_new_fields(self):
         """style_brief 渲染新风格维度；旧 analysis（缺新字段）不报错不输出。"""
