@@ -1,7 +1,7 @@
 # Project Goal
 
 - 使用 Wenyi 将长篇小说可靠地翻译为简体中文，并保留 EPUB 的目录、样式、图片和锚点。
-- 当前任务：通过本机 agy CLI 用 Gemini Flash Medium 初译、Gemini Pro High 精修，并由 Codex Sol High 独立终审及修复审校问题；所有身份事实按叙事位置投影。
+- 当前任务：通过本机 agy CLI 用 Gemini 3.6 Flash Medium 初译、Gemini Pro High 精修，并由 Codex Sol High 独立终审及修复审校问题；所有身份事实按叙事位置投影。
 - 为正在翻译的小说提供只读局域网阅读页，允许手机边看当前译文边等待后续章节完成。
 
 # Lessons Learned
@@ -18,6 +18,7 @@
 - 本机 agy 1.0.13 的 `--model` 要求 `Gemini 3.5 Flash (Medium)` 这类显示名；OpenClaw 风格的短 ID 需要在 provider 内映射。agy 不返回 token usage，只能明确记录字符估算值。
 - agy 1.1.4 的 `models` 仍显示友好名称，但 `--model` 实际优先接受 `gemini-3.5-flash-low` 这类短 ID；provider 应短 ID 优先，仅对明确的 unknown-model 错误回退旧显示名并缓存结果。
 - agy 1.1.4 偶尔会在新进程启动时短暂把有效短 ID 报为 unknown；应先重试短 ID，再回退旧显示名，否则会把暂态注册表竞态放大为整次翻译退出。
+- agy 1.1.5 已暴露 `gemini-3.6-flash-low/medium/high`，`gemini-3.6-flash-medium` 真实纯文本烟测通过；当前配置、provider 默认值与文档示例使用 3.6，3.5 映射仅保留旧配置兼容。
 - agy 1.1.4 的 headless print 模式可能把普通翻译提示误判成写文件任务；传入 `--mode plan` 可禁止工具写入并正常返回译文，且无需放宽全局权限。
 - 即使使用 `--mode plan`，agy 1.1.4 仍可能偶发请求 `write_file` 并在 headless 模式自动拒绝；provider 必须明确要求纯文本回答、识别该拒绝文本并用全新会话有限重试，绝不能用 `--dangerously-skip-permissions` 绕过。
 - agy/Gemini 的内容策略拒绝会以退出码 0 的普通英文文本返回，而不是 JSON 或 CLI 错误；这与工具权限拒绝不同。第 129 章曾因完整提示中的高中生/年龄差恋爱背景与牵手段落组合触发 Google sensitive-words 过滤，批量与逐段兜底均失败。
@@ -127,3 +128,5 @@
 - [x] 发现旧路由把 Codex Sol 找出的严重项交给 Gemini Pro 修复；在 ch0–ch4 审完、10 次 Pro 修复落盘后终止进程，依据事件日志逐项验证并回滚 ch1/ch2/ch4 的 10 个 target 与 TM，备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-review-sol-route-20260722-015455\state-before-rollback`。
 - [x] `review_fixer` 已改为跟随 `review_client`，审校摘要加入 strong 修复模型指纹并升级 schema；专项 61 项通过，完整测试 302 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
 - [ ] 2026-07-22 01:57:35 已从回滚断点重启一键流程（PID 48436）：翻译与标题阶段确认全部完成并跳过，01:57:48 进入 Codex Sol 全书终审，ch0 已重审；实时子进程为 `codex exec --model gpt-5.6-sol` high，未发现 AGY 子进程，stderr 为空。stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260722-015735.*.log`；终审完成后将自动继续 QA、报告、EPUB 组装与结构验收。
+- [x] 将 Gemini 3.5 Flash 默认值和本机高质量配置直接升级为 Gemini 3.6 Flash；保留 3.5 兼容映射，真实 3.6 Medium 烟测返回 `WENYI36_OK`。专项 27 项通过，完整测试 304 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
+- [ ] 译文粗检确认 16,593/16,593 段均非空、长度分布无明显整批截断；同时发现至少 13 段存在实质日文残留或 `原文 -> 译文` 包装污染（集中于 ch22/ch45/ch50/ch69/ch93/ch100/ch107/ch108/ch114/ch130/ch133），待当前 Sol 终审推进后复核是否全部识别并修复。

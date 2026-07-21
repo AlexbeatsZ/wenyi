@@ -24,7 +24,7 @@ llm:
       model: Gemini 3.1 Pro (High)
     fast:
       # 章节梗概和术语抽取也需要稳定识别人名，使用 Flash Medium。
-      model: Gemini 3.5 Flash (Medium)
+      model: Gemini 3.6 Flash (Medium)
 
 # 正文初译专用：Gemini Flash Medium 初译；主 llm 的 Pro 随后对照原文精修。
 # Pro 内容策略拒绝某个精修段落时，也只用此客户端兜底该段。
@@ -35,11 +35,11 @@ translation_llm:
   timeout: 600
   tiers:
     strong:
-      model: Gemini 3.5 Flash (Medium)
+      model: Gemini 3.6 Flash (Medium)
     cheap:
-      model: Gemini 3.5 Flash (Medium)
+      model: Gemini 3.6 Flash (Medium)
     fast:
-      model: Gemini 3.5 Flash (Medium)
+      model: Gemini 3.6 Flash (Medium)
 
 # 精修恢复专用：Gemini Pro 批级失败会先递归拆分；只有仍失败的单段才交给 Codex。
 polish_fallback_llm:

@@ -44,7 +44,7 @@ llm:
   command: agy
   tiers:
     strong:
-      model: Gemini 3.5 Flash (Medium)
+      model: Gemini 3.6 Flash (Medium)
 
 translation_llm:
   provider: openai-compatible
@@ -244,9 +244,9 @@ llm:
     strong:
       model: Gemini 3.1 Pro (High)
     cheap:
-      model: Gemini 3.5 Flash (Medium)
+      model: Gemini 3.6 Flash (Medium)
     fast:
-      model: Gemini 3.5 Flash (Low)
+      model: Gemini 3.6 Flash (Low)
 ```
 
 Antigravity CLI does not expose a per-request system-prompt flag or a
@@ -261,10 +261,12 @@ The CLI also does not report token usage, so Wenyi's usage totals for this
 provider are character-based estimates rather than billable token counts.
 For compatibility with OpenClaw configurations, the short IDs
 `gemini-3.1-pro[-low|-high]` and
-`gemini-3.5-flash[-low|-medium|-high]` are sent as short IDs for agy 1.1. Wenyi
+`gemini-3.6-flash[-low|-medium|-high]` are sent as short IDs for agy 1.1. Wenyi
 retries the short ID once after an explicit unknown-model error before falling
 back to agy 1.0 display names, then caches the successful form. This tolerates
 the brief model-registry race observed during agy 1.1 startup.
+The older `gemini-3.5-flash` IDs remain accepted for existing configurations,
+but new defaults and examples use Gemini 3.6 Flash.
 
 `cwd` may be set to choose the workspace visible to agy. Plan mode is not an
 operating-system security boundary; use an OS sandbox or container when

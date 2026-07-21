@@ -16,18 +16,22 @@ from ..usage import UsageSample
 _ANSI_RE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])")
 _DEFAULT_TIERS = {
     "strong": TierConfig(model="Gemini 3.1 Pro (High)"),
-    "cheap": TierConfig(model="Gemini 3.5 Flash (Medium)"),
-    "fast": TierConfig(model="Gemini 3.5 Flash (Low)"),
+    "cheap": TierConfig(model="Gemini 3.6 Flash (Medium)"),
+    "fast": TierConfig(model="Gemini 3.6 Flash (Low)"),
 }
 _MODEL_DISPLAY_NAMES = {
     "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
     "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
+    "gemini-3.6-flash-medium": "Gemini 3.6 Flash (Medium)",
+    "gemini-3.6-flash-low": "Gemini 3.6 Flash (Low)",
+    "gemini-3.6-flash-high": "Gemini 3.6 Flash (High)",
     "gemini-3.5-flash-medium": "Gemini 3.5 Flash (Medium)",
     "gemini-3.5-flash-low": "Gemini 3.5 Flash (Low)",
     "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
 }
 _MODEL_ALIASES = {
     "gemini-3.1-pro": "gemini-3.1-pro-low",
+    "gemini-3.6-flash": "gemini-3.6-flash-medium",
     "gemini-3.5-flash": "gemini-3.5-flash-medium",
 }
 _DISPLAY_NAME_TO_MODEL = {

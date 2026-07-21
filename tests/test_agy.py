@@ -51,6 +51,12 @@ class TestAgyPrompt(unittest.TestCase):
 
 
 class TestAgyClient(unittest.TestCase):
+    def test_defaults_use_gemini_36_flash(self):
+        client = AgyClient(_config(tiers={}).llm)
+
+        self.assertEqual(client.tiers["cheap"].model, "Gemini 3.6 Flash (Medium)")
+        self.assertEqual(client.tiers["fast"].model, "Gemini 3.6 Flash (Low)")
+
     @patch("trans_novel.llm.providers.agy.subprocess.run")
     def test_invokes_fresh_print_session_with_model_and_unicode(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, "你好\n", "")
@@ -114,6 +120,18 @@ class TestAgyClient(unittest.TestCase):
     @patch("trans_novel.llm.providers.agy.subprocess.run")
     def test_uses_stable_short_model_id_first(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, "ok", "")
+        cfg = _config(tiers={"strong": {"model": "gemini-3.6-flash-high"}})
+
+        AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
+
+        self.assertEqual(
+            run.call_args.args[0][1:3],
+            ["--model", "gemini-3.6-flash-high"],
+        )
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_keeps_legacy_gemini_35_short_id_compatible(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "ok", "")
         cfg = _config(tiers={"strong": {"model": "gemini-3.5-flash-high"}})
 
         AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
@@ -130,17 +148,17 @@ class TestAgyClient(unittest.TestCase):
                 [],
                 1,
                 "",
-                "model gemini-3.5-flash-high is not recognized as a known model",
+                "model gemini-3.6-flash-high is not recognized as a known model",
             ),
             subprocess.CompletedProcess(
                 [],
                 1,
                 "",
-                "model gemini-3.5-flash-high is not recognized as a known model",
+                "model gemini-3.6-flash-high is not recognized as a known model",
             ),
             subprocess.CompletedProcess([], 0, "ok", ""),
         ]
-        cfg = _config(tiers={"strong": {"model": "Gemini 3.5 Flash (High)"}})
+        cfg = _config(tiers={"strong": {"model": "Gemini 3.6 Flash (High)"}})
 
         result = AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
 
@@ -148,15 +166,15 @@ class TestAgyClient(unittest.TestCase):
         self.assertEqual(run.call_count, 3)
         self.assertEqual(
             run.call_args_list[0].args[0][1:3],
-            ["--model", "gemini-3.5-flash-high"],
+            ["--model", "gemini-3.6-flash-high"],
         )
         self.assertEqual(
             run.call_args_list[1].args[0][1:3],
-            ["--model", "gemini-3.5-flash-high"],
+            ["--model", "gemini-3.6-flash-high"],
         )
         self.assertEqual(
             run.call_args_list[2].args[0][1:3],
-            ["--model", "Gemini 3.5 Flash (High)"],
+            ["--model", "Gemini 3.6 Flash (High)"],
         )
 
     @patch("trans_novel.llm.providers.agy.subprocess.run")
@@ -166,11 +184,11 @@ class TestAgyClient(unittest.TestCase):
                 [],
                 1,
                 "",
-                "model gemini-3.5-flash-medium is not recognized as a known model",
+                "model gemini-3.6-flash-medium is not recognized as a known model",
             ),
             subprocess.CompletedProcess([], 0, "ok", ""),
         ]
-        cfg = _config(tiers={"strong": {"model": "Gemini 3.5 Flash (Medium)"}})
+        cfg = _config(tiers={"strong": {"model": "Gemini 3.6 Flash (Medium)"}})
 
         result = AgyClient(cfg.llm).complete([{"role": "user", "content": "x"}])
 
@@ -179,7 +197,7 @@ class TestAgyClient(unittest.TestCase):
         for call in run.call_args_list:
             self.assertEqual(
                 call.args[0][1:3],
-                ["--model", "gemini-3.5-flash-medium"],
+                ["--model", "gemini-3.6-flash-medium"],
             )
 
     @patch("trans_novel.llm.providers.agy.subprocess.run")
