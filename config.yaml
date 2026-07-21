@@ -53,14 +53,18 @@ polish_fallback_llm:
       options:
         reasoning_effort: high
 
-# 独立终审：Codex Sol High 只负责找错；严重项仍由主 llm 的 Gemini Pro High 定向修复。
-# Codex 以无状态、只读、禁止工具的 CLI Adapter 运行；精修时仅接管主模型仍失败的叶子。
+# 独立终审：Codex Sol High 同时负责找错及严重项定向修复，形成同模型闭环。
+# Codex 以无状态、只读、禁止工具的 CLI Adapter 运行；精修备用仍是独立的单叶恢复路径。
 review_llm:
   provider: codex-cli
   command: codex
   cwd: C:/Users/Meta/AppData/Local/Temp/.agents/wenyi-codex-review
   timeout: 1200
   tiers:
+    strong:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
     cheap:
       model: gpt-5.6-sol
       options:
@@ -76,7 +80,7 @@ segment:
 # ── 流水线开关（质量/成本平衡）───────────────────────────────────────────
 pipeline:
   review: true # 一键高质量模式：正文完成后自动使用 Codex Sol High 最终审校
-  autofix_severe: true # 最终审校后由 Gemini Pro High 定向修复严重项（漏译/误译）
+  autofix_severe: true # 最终审校后由同一个 Codex Sol High 定向修复严重项（漏译/误译）
   auto_resolve_glossary_conflicts: true # 审校前由 AGY Gemini 自动裁定未决术语冲突
   align_retry_limit: 2
   polish: true # 润色（强档）：等于用 pro 把全书再翻一遍，最烧钱；默认开

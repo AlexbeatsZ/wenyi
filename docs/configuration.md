@@ -94,10 +94,10 @@ context-stripping and `translation_llm` path first.
 
 ### Separate final-review model
 
-`review_llm` optionally assigns only the independent final-review pass to a
-different provider. Severe fixes still use the main `llm`, so the auditor finds
-problems while the configured refinement model remains responsible for edits.
-The local Codex CLI can be used as a read-only Sol auditor:
+`review_llm` optionally assigns the independent final-review pass and its severe
+autofixes to a different provider. The same model therefore owns both finding
+and fixing review issues. The local Codex CLI can be used as a read-only Sol
+reviewer and fixer:
 
 ```yaml
 review_llm:
@@ -106,6 +106,10 @@ review_llm:
   cwd: C:/Users/you/AppData/Local/Temp/.agents/wenyi-codex-review
   timeout: 1200
   tiers:
+    strong:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
     cheap:
       model: gpt-5.6-sol
       options:
@@ -114,8 +118,9 @@ review_llm:
 
 This adapter launches an ephemeral `codex exec` process in a read-only sandbox,
 sends the request through stdin, and explicitly forbids tools or file access.
-It can serve final review or the rare failed refinement leaf without replacing
-the primary translation/refinement models.
+It can serve final review and review fixes without replacing the primary
+translation/refinement models. Configure `polish_fallback_llm` separately when
+the same adapter should also handle a rare failed refinement leaf.
 
 The first PDF import also reads `MINERU_API_KEY` to call the MinerU conversion service. This key is independent of the LLM provider and is not written to `config.yaml`.
 

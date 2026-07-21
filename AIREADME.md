@@ -1,7 +1,7 @@
 # Project Goal
 
 - 使用 Wenyi 将长篇小说可靠地翻译为简体中文，并保留 EPUB 的目录、样式、图片和锚点。
-- 当前任务：通过本机 agy CLI 用 Gemini Flash Medium 初译、Gemini Pro High 精修，并由 Codex Sol High 独立终审；所有身份事实按叙事位置投影。
+- 当前任务：通过本机 agy CLI 用 Gemini Flash Medium 初译、Gemini Pro High 精修，并由 Codex Sol High 独立终审及修复审校问题；所有身份事实按叙事位置投影。
 - 为正在翻译的小说提供只读局域网阅读页，允许手机边看当前译文边等待后续章节完成。
 
 # Lessons Learned
@@ -26,7 +26,7 @@
 - Gemini 内容策略拒绝应在 AGY 内用全新会话有限重试；持续拒绝时先逐段定位，只把仍被拒绝的精修段落交给 `translation_llm`，不能让整批静默换模型。
 - AGY 在 Windows 上通过命令行参数接收提示词；标题翻译即使已按 40 项/4000 字分批，若每批仍注入上千条全量术语，也会触发 `CreateProcess` 的 `WinError 206`。标题批次只能注入当前标题实际命中的术语，provider 也应把 206 报为命令行过长而非误报 CLI 缺失。
 - 最终 EPUB 验收不能只确认 ZIP 可打开；还需运行 `7z t`，并核对 OPF manifest 文件均存在、spine idref 均能解析。
-- 最终审校的严重项修复属于精修阶段，必须使用主 `llm`（当前 AGY Gemini），不能复用只负责初译的 `translation_llm`；修复器直接根据审校意见定向重译，只保留长度与标点等确定性验收，不再调用 Reviewer 二次审核。
+- 最终审校的严重项修复必须跟随 `review_llm`，由发现问题的同一个模型直接根据审校意见定向重译；未配置独立 `review_llm` 时才自然回退主 `llm`。`translation_llm` 仍只负责初译，不能接收审校修复请求。
 - 术语冲突可在审校前由主模型自动裁定：先按 source 合并重复冲突，附最多 3 条局部原译文上下文，再按 4500 字符预算分批；模型响应必须覆盖整批所有 source 才落库，不能把不完整输出伪装成已解决。
 - AGY/Gemini 的长 JSON 偶发返回无效结构；真实失败章节与剩余术语批次原样重放均能成功，合成 60 项/6362 字节 JSON 也正常，根因是暂态坏回复。应抛出专用 `JSONParseError`，先用全新请求追加“严格匹配 schema、简短字段、完整闭合”的提示重试；仍失败时 Reviewer 与 GlossaryArbiter 递归二分，且术语原始批次的全部子批验证成功前不得落库。
 - Kakuyomu 原始 EPUB 与 Wenyi state 的 source 均完整保留日文 `「」`；本书引号缺失发生在模型翻译/润色后的 target。提示词不能作为唯一防线，应按 source 逻辑段边界确定性恢复引号。
@@ -47,7 +47,7 @@
 - NarrativeKnowledge Module 将“表面词如何翻译”与“此处可以知道谁是谁”拆开：实体 alias 与事实都有 `visible_from/visible_until`，confirmed/verified 事实必须带原文证据和0基章节/段号；冲突事实和同时指向多人的职务称谓不注入。
 - 自动抽取器只能持久化空格/全半角/直接敬称后缀等透明 alias；昵称、代号、职务与本名的身份关联属于时序叙事事实，不能再写成全书永久 alias。
 - 精修返回原初译不是成功。`require_polish_success` 将失败段号持久化，并能从旧 `batch_translated` 事件恢复；回头重试早期章节时必须按书序重建前文上下文，不能误用最后已译章节的滚动尾部。
-- Codex CLI 适合作为独立 `review_llm`：用 ephemeral/read-only/no-tools 文本 Adapter 审校，严重项仍交给主 Gemini Pro 修复。Windows 上 `codex exec review` 的工具型只读沙箱可能因 `CreateProcessAsUserW 1312` 无法启动 PowerShell，但纯文本审校 Adapter 已真实通过。
+- Codex CLI 适合作为独立 `review_llm`：用 ephemeral/read-only/no-tools 文本 Adapter 完成审校和严重项修复，形成 Sol 发现、Sol 修复的闭环。Windows 上 `codex exec review` 的工具型只读沙箱可能因 `CreateProcessAsUserW 1312` 无法启动 PowerShell，但纯文本审校 Adapter 已真实通过。
 
 - “状态表跳过章节、持续往后翻译”不等于正文漏译：`pending` 同时表示正文已齐但仍有 `refinement_pending_indexes`。普通续跑在启动时按书序抓取一次 pending 快照，每章精修失败后保留 pending 并继续下一章，不会在同一轮原地无限重试。
 - 2026-07-22 续跑从事件日志恢复 21 章共 1000 个待精修段，成功补回 711 个；结束时全书 target 均非空，仅 ch62/79/109/111/131/132/135 共 289 段仍未通过 Pro 精修。持续失败批次提示词约 3412–7146 字符，排除 Windows 命令行过长；当前 `Polisher` 会吞掉非策略异常及无效/不等长输出，只落失败索引，因此现有状态无法区分坏 JSON、数组不等长或 AGY CLI 异常。
@@ -87,7 +87,7 @@
 - [x] 新增 Gemini 内容策略拒绝的 3 次干净会话重试与逐段 DeepSeek 回退；真实验证第 129 章故障段可成功完成两阶段处理。
 - [x] 修复标题翻译 `WinError 206`：每批只注入标题命中的术语，并纠正 AGY 对 Windows 命令行过长的错误提示。
 - [x] `trans-novel status` 将运行状态移动到章节表格和术语统计之后，便于直接查看最后一行。
-- [x] 审校修复改由主 AGY Gemini 直接根据意见定向重译；DeepSeek `translation_llm` 不再接收审校修复请求，无额外 Reviewer 二审。
+- [x] 审校修复器不再使用初译 `translation_llm`；最初实现曾固定到主 AGY Gemini，现已按用户要求改为跟随 `review_llm`，无额外 Reviewer 二审。
 - [x] 新增主模型自动裁定术语冲突：当前配置默认开启，CLI 可用 `--resolve-conflicts/--no-resolve-conflicts` 覆盖；122 条冲突日志实际合并为 54 个术语、6 个安全长度批次。
 - [x] 修复暂态无效 JSON 中断：`complete_json()` 使用强化格式提示发起一次新请求，连续失败后正文审校块和术语裁定批次自动递归二分；新增 4 条故障回归测试及真实 AGY JSON 烟测。
 - [ ] 《屈曲ラヴァー》最终审校待续跑：修复前状态为 26 章 done、1 章 failed、110 章 pending；术语冲突剩 11 条记录/9 个独立术语，前 45 个模型裁定已安全落库。运行 `review --fix` 即可从现有状态恢复。
@@ -116,7 +116,7 @@
 - [x] 新增独立 `review_llm` 与 `codex-cli` Adapter；当前配置使用 `gpt-5.6-sol` high 终审、24k 字符大块，真实 pronoun 错误烟测返回结构化问题。
 - [x] 精修失败改为可恢复质量门：旧事件扫描已识别当前干净状态 ch4 42段、ch6 47段、ch7 51段待补精修；续跑会按正确前文上下文重试，审校前拒绝静默放行。
 - [x] 新结构相关 300 项完整测试执行；298 项通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
-- [x] 核对并固化未来书籍的标准使用顺序：全新状态译前解析与事实门、Flash Medium 初译、Pro High 精修、Codex Sol High 终审、Pro High 严重项修复、QA/报告与 EPUB 结构验收；翻译和审校均支持批次级断点续跑。
+- [x] 核对并固化未来书籍的标准使用顺序：全新状态译前解析与事实门、Flash Medium 初译、Pro High 精修、Codex Sol High 终审及严重项修复、QA/报告与 EPUB 结构验收；翻译和审校均支持批次级断点续跑。
 - [x] 将本机默认配置切换为一键高质量模式：单条 `translate` 命令默认开启最终审校、严重项自动修复、术语冲突裁定和一致性 QA；当前干净重译的隔离配置同步更新，下一次续跑生效。
 - [x] 处理上游 PR #88 的 Copilot 反馈：`Polisher.polish([])` 现在会清空上一次失败索引，并新增状态泄漏回归测试；提交 `bcf8b2b` 已推送到 PR 分支，专项 21 项通过，完整 236 项通过，仅余 2 项既有 Windows 路径断言失败。
 - [x] 统一干净重译的查看入口：默认 `config.yaml` 已指向 `state/revisions/20260721_clean`，普通 `trans-novel status/translate` 现在读取正在运行的新状态，不再误显示旧成品状态。
@@ -124,4 +124,6 @@
 - [x] 新增精修恢复链：坏 JSON、空数组、段数不等和 provider 异常先由 Gemini 递归拆批重试，失败叶子才由独立 `polish_fallback_llm` 接管；当前本机配置使用 Codex Sol High，策略拒绝仍优先走去未来上下文与 Flash 备用。
 - [x] 精修恢复专项 71 项通过，完整测试 301 项与 15 个子测试通过；仅 2 项既有 Windows `/tmp/output` 路径断言失败。真实单段验证已确认主模型故障时 Codex 返回等长译文并清空失败索引，未改正式状态。
 - [x] 2026-07-22 恢复代码正式续跑已将 ch62/79/109/111/131 共 176 个精修缺口全部清零；137 章翻译状态均为 done，标题翻译完成，2 条术语冲突已裁定。
-- [ ] Codex Sol 全书终审已于 2026-07-22 01:41:48 启动；完成后仍需执行 Gemini Pro 严重项修复、QA、报告、EPUB 组装与结构验收。
+- [x] 发现旧路由把 Codex Sol 找出的严重项交给 Gemini Pro 修复；在 ch0–ch4 审完、10 次 Pro 修复落盘后终止进程，依据事件日志逐项验证并回滚 ch1/ch2/ch4 的 10 个 target 与 TM，备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-review-sol-route-20260722-015455\state-before-rollback`。
+- [x] `review_fixer` 已改为跟随 `review_client`，审校摘要加入 strong 修复模型指纹并升级 schema；专项 61 项通过，完整测试 302 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
+- [ ] 从回滚断点重启 Codex Sol 全书终审及严重项修复；完成后继续 QA、报告、EPUB 组装与结构验收。

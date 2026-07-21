@@ -85,6 +85,28 @@ polish_fallback_llm:
 失败类型、递归范围和恢复模型接管的段号都会写入批次事件。明确的内容策略拒绝
 仍先走既有的去未来上下文与 `translation_llm` 备用路径。
 
+### 分离最终审校模型
+
+可选的 `review_llm` 同时负责独立终审和 `autofix_severe` 严重项修复，确保发现
+问题与修复问题由同一个模型闭环完成。未配置时，两步都复用主 `llm`。
+
+```yaml
+review_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/you/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    strong:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+    cheap:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+```
+
 PDF 输入的首次解析另外读取 `MINERU_API_KEY`，用于调用 MinerU
 转换服务。该密钥与 LLM provider 配置无关，也不写入 `config.yaml`。
 

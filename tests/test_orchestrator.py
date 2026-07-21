@@ -63,7 +63,7 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIs(orch.polisher.fallback_client, deepseek)
         self.assertIs(orch.review_fixer.client, gemini)
 
-    def test_review_client_is_independent_but_fixes_stay_on_main_client(self):
+    def test_review_client_handles_detection_and_fixes(self):
         cfg = _config("state")
         main = FakeClient()
         reviewer = FakeClient()
@@ -71,7 +71,7 @@ class TestOrchestrator(unittest.TestCase):
         orch = Orchestrator(cfg, client=main, review_client=reviewer)
 
         self.assertIs(orch.reviewer.client, reviewer)
-        self.assertIs(orch.review_fixer.client, main)
+        self.assertIs(orch.review_fixer.client, reviewer)
 
     def test_polish_recovery_client_is_independent_from_review_and_translation(self):
         cfg = _config("state")
@@ -945,6 +945,21 @@ class TestReviewReporting(unittest.TestCase):
         before = orch._review_digest(segments, [], autofix=False)
         cfg.llm.tiers["cheap"].model = "replacement-review-model"
         after = orch._review_digest(segments, [], autofix=False)
+
+        self.assertNotEqual(before, after)
+
+    def test_review_digest_changes_when_review_fix_model_changes(self):
+        """切换审校修复模型后必须重新审校，不能沿用旧修复结果。"""
+        from trans_novel.ingest.models import Segment
+
+        cfg = _config("state")
+        cfg.review_llm = cfg.llm.model_copy(deep=True)
+        orch = Orchestrator(cfg, client=FakeClient(handler=routing_handler))
+        segments = [Segment(index=0, source="原文。", target="译文。")]
+
+        before = orch._review_digest(segments, [], autofix=True)
+        cfg.review_llm.tiers["strong"].model = "replacement-fix-model"
+        after = orch._review_digest(segments, [], autofix=True)
 
         self.assertNotEqual(before, after)
 

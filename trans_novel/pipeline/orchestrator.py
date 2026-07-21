@@ -158,8 +158,9 @@ class Orchestrator:
         self.analyzer = Analyzer(self.client, config)
         self.synopsizer = Synopsizer(self.client, config)
         self.translator = Translator(self.translation_client, config)
-        # 最终审校修复属于精修阶段，始终使用主 llm；translation_llm 只负责初译。
-        self.review_fixer = Translator(self.client, config)
+        # 审校与其自动修复共享 review_llm，确保同一模型对发现的问题负责到底。
+        # 未配置独立 review_llm 时，review_client 本身就是主 llm，保持向后兼容。
+        self.review_fixer = Translator(self.review_client, config)
         self.reviewer = Reviewer(self.review_client, config)
         self.glossary_arbiter = GlossaryArbiter(self.client, config)
         self.backtrans = BackTranslator(self.client, config)
@@ -1316,7 +1317,7 @@ class Orchestrator:
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation")
-    _REVIEW_SCHEMA_VERSION = 4
+    _REVIEW_SCHEMA_VERSION = 5
     _GLOSSARY_ARBITER_BATCH_CHARS = 4500
     _GLOSSARY_DECISION_ATTEMPTS = 2
 
@@ -1516,15 +1517,19 @@ class Orchestrator:
         变化都会使旧审校结果失效。提示词或审校协议变化时应递增 schema 版本。
         """
         review_llm = self.config.review_llm or self.config.llm
+        review_tier = (
+            review_llm.tiers.get("cheap") or review_llm.tiers.get("strong")
+        )
+        fix_tier = review_llm.tiers.get("strong") or review_tier
         payload = {
             "version": self._REVIEW_SCHEMA_VERSION,
             "review_model": {
                 "provider": review_llm.provider,
-                "model": (
-                    review_llm.tiers.get("cheap").model
-                    if review_llm.tiers.get("cheap") is not None
-                    else None
-                ),
+                "model": review_tier.model if review_tier is not None else None,
+            },
+            "review_fix_model": {
+                "provider": review_llm.provider,
+                "model": fix_tier.model if fix_tier is not None else None,
             },
             "narrative_knowledge": narrative_digest,
             "future_context_policy": self.config.pipeline.future_context_policy,

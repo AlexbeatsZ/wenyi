@@ -41,12 +41,16 @@ llm:
       options:
         thinking: false
 
-# 可选：只把最终审校交给独立模型。省略时复用主 llm。
+# 可选：把最终审校及其严重项自动修复交给独立模型。省略时复用主 llm。
 # review_llm:
 #   provider: codex-cli
 #   command: codex
 #   timeout: 1200
 #   tiers:
+#     strong:
+#       model: gpt-5.6-sol
+#       options:
+#         reasoning_effort: high
 #     cheap:
 #       model: gpt-5.6-sol
 #       options:
