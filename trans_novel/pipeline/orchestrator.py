@@ -111,6 +111,8 @@ class _BatchResult:
     targets: list[str]
     bt_samples: list[tuple[str, str]] = field(default_factory=list)
     policy_fallback_indexes: list[int] = field(default_factory=list)
+    polish_recovery_fallback_indexes: list[int] = field(default_factory=list)
+    polish_failure_details: list[dict[str, object]] = field(default_factory=list)
     refinement_failed_indexes: list[int] = field(default_factory=list)
 
 
@@ -125,6 +127,7 @@ class Orchestrator:
         client: LLMClient | None = None,
         translation_client: LLMClient | None = None,
         review_client: LLMClient | None = None,
+        polish_fallback_client: LLMClient | None = None,
     ):
         """初始化共享 LLM 客户端、用量检查点和各流水线 Agent。"""
         self.config = config
@@ -139,11 +142,17 @@ class Orchestrator:
             if config.review_llm is not None
             else self.client
         )
+        self.polish_fallback_client = polish_fallback_client or (
+            build_client_from_llm(config.polish_fallback_llm)
+            if config.polish_fallback_llm is not None
+            else None
+        )
         self._usage_clients = list({id(item): item for item in (
             self.client,
             self.translation_client,
             self.review_client,
-        )}.values())
+            self.polish_fallback_client,
+        ) if item is not None}.values())
         # 各 client 的统计是进程内累计；checkpoint 用于每次落盘时只提取新增部分。
         self._usage_checkpoint = self._current_usage_summary()
         self.analyzer = Analyzer(self.client, config)
@@ -162,6 +171,7 @@ class Orchestrator:
                 if self.translation_client is not self.client
                 else None
             ),
+            recovery_fallback_client=self.polish_fallback_client,
         )
         self.extractor = GlossaryExtractor(self.client, config)
 
@@ -1056,6 +1066,19 @@ class Orchestrator:
                             batch_start + index
                             for index in self.polisher.last_failed_indexes
                         ],
+                        recovery_fallback_indexes=[
+                            batch_start + index
+                            for index in self.polisher.last_recovery_fallback_indexes
+                        ],
+                        failure_details=[
+                            {
+                                **detail,
+                                "start_index": batch_start + int(
+                                    detail.get("start_index", 0)
+                                ),
+                            }
+                            for detail in self.polisher.last_failure_details
+                        ],
                     )
                 # 该批上次已在原位译完；必要的精修重试后重建滚动上下文。
                 context.add_targets(existing_targets)
@@ -1160,6 +1183,10 @@ class Orchestrator:
                     else None
                 ),
                 policy_fallback_indexes=res.policy_fallback_indexes,
+                polish_recovery_fallback_indexes=(
+                    res.polish_recovery_fallback_indexes
+                ),
+                polish_failure_details=res.polish_failure_details,
                 punctuation_normalized=self._punctuation_enabled(),
                 backtranslate_sample_count=len(res.bt_samples),
                 segments=[
@@ -1931,6 +1958,8 @@ class Orchestrator:
         policy_fallback_indexes = list(
             self.translator.last_policy_context_fallback_indexes
         )
+        polish_recovery_fallback_indexes: list[int] = []
+        polish_failure_details: list[dict[str, object]] = []
         refinement_failed_indexes: list[int] = []
         if self.config.pipeline.polish:
             polished = self.polisher.polish(
@@ -1953,6 +1982,12 @@ class Orchestrator:
             refinement_failed_indexes = list(
                 self.polisher.last_failed_indexes
             )
+            polish_recovery_fallback_indexes = list(
+                self.polisher.last_recovery_fallback_indexes
+            )
+            polish_failure_details = [
+                dict(detail) for detail in self.polisher.last_failure_details
+            ]
 
         bt_samples: list[tuple[str, str]] = []
         rate = self.config.pipeline.backtranslate_sample
@@ -1965,6 +2000,8 @@ class Orchestrator:
             targets=targets,
             bt_samples=bt_samples,
             policy_fallback_indexes=policy_fallback_indexes,
+            polish_recovery_fallback_indexes=polish_recovery_fallback_indexes,
+            polish_failure_details=polish_failure_details,
             refinement_failed_indexes=refinement_failed_indexes,
         )
 

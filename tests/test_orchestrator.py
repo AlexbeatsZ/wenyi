@@ -73,6 +73,25 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIs(orch.reviewer.client, reviewer)
         self.assertIs(orch.review_fixer.client, main)
 
+    def test_polish_recovery_client_is_independent_from_review_and_translation(self):
+        cfg = _config("state")
+        main = FakeClient()
+        initial = FakeClient()
+        reviewer = FakeClient()
+        recovery = FakeClient()
+
+        orch = Orchestrator(
+            cfg,
+            client=main,
+            translation_client=initial,
+            review_client=reviewer,
+            polish_fallback_client=recovery,
+        )
+
+        self.assertIs(orch.polisher.client, main)
+        self.assertIs(orch.polisher.fallback_client, initial)
+        self.assertIs(orch.polisher.recovery_fallback_client, recovery)
+
     def test_failed_polish_remains_pending_and_is_retried(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = os.path.join(directory, "retry-polish.txt")
@@ -99,6 +118,18 @@ class TestOrchestrator(unittest.TestCase):
                 chapter.meta["refinement_pending_indexes"],
                 list(range(len(chapter.text_segments))),
             )
+            with open(store.event_log_path, encoding="utf-8") as file:
+                events = [json.loads(line) for line in file]
+            failed_batch = next(
+                event for event in reversed(events)
+                if event["event"] == "batch_translated"
+            )
+            self.assertEqual(failed_batch["polish_recovery_fallback_indexes"], [])
+            self.assertTrue(failed_batch["polish_failure_details"])
+            self.assertEqual(
+                failed_batch["polish_failure_details"][0]["error_type"],
+                "PolishResponseError",
+            )
 
             store = Orchestrator(
                 cfg, client=FakeClient(handler=routing_handler)
@@ -109,6 +140,56 @@ class TestOrchestrator(unittest.TestCase):
             )
             self.assertEqual(chapter.meta["refinement_pending_indexes"], [])
             self.assertTrue(all((segment.target or "").startswith("润") for segment in chapter.text_segments))
+
+    def test_polish_recovery_fallback_is_persisted_and_clears_quality_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = os.path.join(directory, "recovery-polish.txt")
+            with open(source_path, "w", encoding="utf-8") as file:
+                file.write("# 第一章\n\n一段原文。\n\n二段原文。\n")
+            cfg = _config(os.path.join(directory, "state"))
+            cfg.pipeline.review = False
+            cfg.pipeline.consistency_qa = False
+            cfg.pipeline.book_understanding = False
+
+            def primary_handler(messages, tier, json_mode):
+                if "中文润色编辑" in messages[0]["content"]:
+                    return json.dumps({"polished": []}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            def recovery_handler(messages, tier, json_mode):
+                count = len(re.findall(
+                    r"^\[(\d+)\]", messages[-1]["content"], re.M
+                ))
+                return json.dumps({
+                    "polished": [f"Codex精修{index}" for index in range(count)]
+                }, ensure_ascii=False)
+
+            store = Orchestrator(
+                cfg,
+                client=FakeClient(handler=primary_handler),
+                polish_fallback_client=FakeClient(handler=recovery_handler),
+            ).run(source_path)
+            chapter = store.load_chapter(0)
+
+            self.assertEqual(
+                store.load_manifest()["chapters"][0]["status"], STATUS_DONE
+            )
+            self.assertEqual(chapter.meta["refinement_pending_indexes"], [])
+            self.assertTrue(all(
+                (segment.target or "").startswith("Codex精修")
+                for segment in chapter.text_segments
+            ))
+            with open(store.event_log_path, encoding="utf-8") as file:
+                events = [json.loads(line) for line in file]
+            translated = next(
+                event for event in reversed(events)
+                if event["event"] == "batch_translated"
+            )
+            self.assertEqual(
+                translated["polish_recovery_fallback_indexes"],
+                list(range(len(chapter.text_segments))),
+            )
+            self.assertTrue(translated["polish_failure_details"])
 
     def test_current_only_context_does_not_inject_future_synopsis(self):
         with tempfile.TemporaryDirectory() as directory:

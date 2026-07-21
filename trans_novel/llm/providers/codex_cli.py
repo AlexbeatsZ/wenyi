@@ -1,8 +1,9 @@
-"""Read-only ``codex exec`` adapter for independent literary review.
+"""Read-only ``codex exec`` adapter for literary text stages.
 
 Codex is intentionally exposed as a configurable LLM adapter rather than
-hard-wired into translation.  A caller can assign it only to ``review_llm``;
-initial translation and polishing keep their existing providers.
+hard-wired into translation. A caller can assign it to ``review_llm`` or the
+single-leaf ``polish_fallback_llm`` recovery path; primary translation and
+refinement keep their existing providers.
 """
 
 from __future__ import annotations

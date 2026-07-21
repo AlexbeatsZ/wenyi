@@ -119,11 +119,83 @@ class TestPolisher(unittest.TestCase):
 
     def test_polish_mismatch_keeps_original(self):
         client = FakeClient(handler=lambda m, t, j: json.dumps(
-            {"polished": ["只有一段"]}, ensure_ascii=False))
+            {"polished": []}, ensure_ascii=False))
         p = Polisher(client, _cfg())
         out = p.polish(["甲", "乙"])
-        self.assertEqual(out, ["甲", "乙"])  # 段数不符 → 保守保留原译
+        self.assertEqual(out, ["甲", "乙"])  # 叶子仍不合法 → 保守保留原译
         self.assertEqual(p.last_failed_indexes, [0, 1])
+
+    def test_invalid_batch_is_recursively_split_before_giving_up(self):
+        def handler(messages, tier, json_mode):
+            count = len(re.findall(r"^\[(\d+)\]", messages[-1]["content"], re.M))
+            if count > 1:
+                return json.dumps({"polished": ["漏项"]}, ensure_ascii=False)
+            return json.dumps({"polished": ["单段精修"]}, ensure_ascii=False)
+
+        client = FakeClient(handler=handler)
+        polisher = Polisher(client, _cfg())
+
+        result = polisher.polish(["初译一", "初译二"], sources=["原文一", "原文二"])
+
+        self.assertEqual(result, ["单段精修", "单段精修"])
+        self.assertEqual(polisher.last_failed_indexes, [])
+        self.assertEqual(polisher.last_recovery_fallback_indexes, [])
+        self.assertEqual(len(client.calls), 3)
+        self.assertTrue(any(
+            detail["error_type"] == "PolishResponseError"
+            for detail in polisher.last_failure_details
+        ))
+
+    def test_persistent_leaf_failure_uses_recovery_fallback_only_for_leaf(self):
+        def primary_handler(messages, tier, json_mode):
+            user = messages[-1]["content"]
+            count = len(re.findall(r"^\[(\d+)\]", user, re.M))
+            if count > 1 or "问题原文" in user:
+                raise RuntimeError("primary temporarily failed")
+            return json.dumps({"polished": ["主模型精修"]}, ensure_ascii=False)
+
+        primary = FakeClient(handler=primary_handler)
+        recovery = FakeClient(handler=lambda messages, tier, json_mode: json.dumps(
+            {"polished": ["Codex精修"]}, ensure_ascii=False
+        ))
+        polisher = Polisher(
+            primary,
+            _cfg(),
+            recovery_fallback_client=recovery,
+        )
+
+        result = polisher.polish(
+            ["初译一", "初译二"],
+            sources=["普通原文", "问题原文"],
+        )
+
+        self.assertEqual(result, ["主模型精修", "Codex精修"])
+        self.assertEqual(polisher.last_recovery_fallback_indexes, [1])
+        self.assertEqual(polisher.last_failed_indexes, [])
+        self.assertEqual(len(recovery.calls), 1)
+        self.assertIn("问题原文", recovery.calls[0]["messages"][-1]["content"])
+
+    def test_failed_recovery_leaf_keeps_original_and_resets_on_empty_call(self):
+        primary = FakeClient(handler=lambda messages, tier, json_mode: (_ for _ in ()).throw(
+            RuntimeError("primary failed")
+        ))
+        recovery = FakeClient(handler=lambda messages, tier, json_mode: (_ for _ in ()).throw(
+            RuntimeError("recovery failed")
+        ))
+        polisher = Polisher(
+            primary,
+            _cfg(),
+            recovery_fallback_client=recovery,
+        )
+
+        self.assertEqual(polisher.polish(["保留初译"], sources=["原文"]), ["保留初译"])
+        self.assertEqual(polisher.last_failed_indexes, [0])
+        self.assertTrue(polisher.last_failure_details)
+
+        self.assertEqual(polisher.polish([]), [])
+        self.assertEqual(polisher.last_failed_indexes, [])
+        self.assertEqual(polisher.last_recovery_fallback_indexes, [])
+        self.assertEqual(polisher.last_failure_details, [])
 
     def test_policy_rejected_segment_uses_deepseek_fallback_only_for_it(self):
         def gemini_handler(messages, tier, json_mode):

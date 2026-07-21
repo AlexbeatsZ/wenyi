@@ -62,6 +62,29 @@ translation_llm:
 `translation_llm` 时，初译继续使用主 `llm`，与旧配置兼容。所有密钥仍只从
 环境变量读取。
 
+### 分离精修恢复模型
+
+可选的 `polish_fallback_llm` 只处理主精修模型最终仍失败的单段。主模型返回坏
+JSON、空数组、段数不等或 provider 异常时，Wenyi 会先递归拆分失败批次并继续
+用主模型重试；只有拆到单段仍失败时才调用恢复模型。两个模型均失败时保留初译
+并继续标记 refinement pending。
+
+```yaml
+polish_fallback_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/you/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    strong:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+```
+
+失败类型、递归范围和恢复模型接管的段号都会写入批次事件。明确的内容策略拒绝
+仍先走既有的去未来上下文与 `translation_llm` 备用路径。
+
 PDF 输入的首次解析另外读取 `MINERU_API_KEY`，用于调用 MinerU
 转换服务。该密钥与 LLM provider 配置无关，也不写入 `config.yaml`。
 

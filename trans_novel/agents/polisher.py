@@ -13,6 +13,10 @@ from . import prompts
 from .base import Agent
 
 
+class PolishResponseError(ValueError):
+    """精修回复可解析但不满足严格的一段对一段协议。"""
+
+
 class Polisher(Agent):
     def __init__(
         self,
@@ -20,11 +24,18 @@ class Polisher(Agent):
         config: Config,
         *,
         fallback_client: LLMClient | None = None,
+        recovery_fallback_client: LLMClient | None = None,
     ) -> None:
         super().__init__(client, config)
+        # 原有 fallback 只处理明确的内容策略拒绝，通常是初译 Flash。
         self.fallback_client = fallback_client
+        # 独立恢复模型处理坏 JSON、漏项、CLI 暂态失败和策略备用也失败的叶子。
+        self.recovery_fallback_client = recovery_fallback_client
         self.last_policy_fallback_indexes: list[int] = []
+        self.last_policy_context_fallback_indexes: list[int] = []
+        self.last_recovery_fallback_indexes: list[int] = []
         self.last_failed_indexes: list[int] = []
+        self.last_failure_details: list[dict[str, object]] = []
 
     def _call(
         self,
@@ -39,7 +50,7 @@ class Polisher(Agent):
         chapter_digest: str,
         narrative_facts: str,
         stage: str,
-    ) -> list[str] | None:
+    ) -> list[str]:
         n = len(targets)
         system = prompts.render(
             "polisher_system", src=self.src, tgt=self.tgt, n=n,
@@ -65,13 +76,103 @@ class Polisher(Agent):
             stage=stage,
         )
         items = data.get("polished") if isinstance(data, dict) else data
-        if isinstance(items, list) and len(items) == n:
-            polished = [str(item).strip() for item in items]
-            if all(polished):
-                return polished
-        return None
+        if not isinstance(items, list):
+            raise PolishResponseError("精修回复缺少 polished 数组")
+        if len(items) != n:
+            raise PolishResponseError(
+                f"精修回复段数不符：期望 {n}，实际 {len(items)}"
+            )
+        polished = [str(item).strip() for item in items]
+        empty = [index for index, item in enumerate(polished) if not item]
+        if empty:
+            raise PolishResponseError(
+                f"精修回复包含空段：{','.join(str(index) for index in empty[:10])}"
+            )
+        return polished
 
-    def _polish_after_policy_rejection(
+    @staticmethod
+    def _extend_unique(target: list[int], indexes: list[int]) -> None:
+        target[:] = sorted(set(target) | set(indexes))
+
+    def _record_failure(
+        self,
+        error: Exception,
+        *,
+        offset: int,
+        count: int,
+        stage: str,
+    ) -> None:
+        self.last_failure_details.append({
+            "start_index": offset,
+            "count": count,
+            "stage": stage,
+            "error_type": type(error).__name__,
+            "error": str(error)[:500],
+        })
+
+    def _fallback_leaf(
+        self,
+        target: str,
+        *,
+        source: str,
+        glossary_terms: list[GlossaryTerm],
+        style: str,
+        context: str,
+        book_synopsis: str,
+        chapter_digest: str,
+        narrative_facts: str,
+        offset: int,
+        policy_rejected: bool,
+    ) -> str:
+        kwargs = {
+            "sources": [source],
+            "glossary_terms": glossary_terms,
+            "style": style,
+            "context": context,
+            "book_synopsis": book_synopsis,
+            "chapter_digest": chapter_digest,
+            "narrative_facts": narrative_facts,
+        }
+        if policy_rejected and self.fallback_client is not None:
+            try:
+                result = self._call(
+                    self.fallback_client,
+                    [target],
+                    stage="PolisherPolicyFallback",
+                    **kwargs,
+                )
+                self._extend_unique(self.last_policy_fallback_indexes, [offset])
+                return result[0]
+            except Exception as error:
+                self._record_failure(
+                    error,
+                    offset=offset,
+                    count=1,
+                    stage="PolisherPolicyFallback",
+                )
+
+        if self.recovery_fallback_client is not None:
+            try:
+                result = self._call(
+                    self.recovery_fallback_client,
+                    [target],
+                    stage="PolisherRecoveryFallback",
+                    **kwargs,
+                )
+                self._extend_unique(self.last_recovery_fallback_indexes, [offset])
+                return result[0]
+            except Exception as error:
+                self._record_failure(
+                    error,
+                    offset=offset,
+                    count=1,
+                    stage="PolisherRecoveryFallback",
+                )
+
+        self._extend_unique(self.last_failed_indexes, [offset])
+        return target
+
+    def _polish_partition(
         self,
         targets: list[str],
         *,
@@ -82,46 +183,92 @@ class Polisher(Agent):
         book_synopsis: str,
         chapter_digest: str,
         narrative_facts: str,
+        offset: int,
+        stage: str,
     ) -> list[str]:
-        """逐段定位 policy 拒绝，只把仍被拒绝的段落交给备用客户端。"""
-        polished: list[str] = []
-        for index, (source, target) in enumerate(zip(sources, targets)):
-            kwargs = {
-                "sources": [source],
+        """批级失败递归二分；只有失败叶子才交给独立恢复模型。"""
+        kwargs = {
+            "sources": sources,
+            "glossary_terms": glossary_terms,
+            "style": style,
+            "context": context,
+            "book_synopsis": book_synopsis,
+            "chapter_digest": chapter_digest,
+            "narrative_facts": narrative_facts,
+        }
+        policy_rejected = False
+        try:
+            return self._call(self.client, targets, stage=stage, **kwargs)
+        except ContentPolicyError as error:
+            policy_rejected = True
+            self._record_failure(
+                error, offset=offset, count=len(targets), stage=stage
+            )
+            stripped_kwargs = {
+                **kwargs,
+                "context": "",
+                "book_synopsis": "",
+                "chapter_digest": "",
+            }
+            try:
+                result = self._call(
+                    self.client,
+                    targets,
+                    stage="PolisherContextFallback",
+                    **stripped_kwargs,
+                )
+                self._extend_unique(
+                    self.last_policy_context_fallback_indexes,
+                    list(range(offset, offset + len(targets))),
+                )
+                return result
+            except Exception as stripped_error:
+                self._record_failure(
+                    stripped_error,
+                    offset=offset,
+                    count=len(targets),
+                    stage="PolisherContextFallback",
+                )
+        except Exception as error:
+            self._record_failure(
+                error, offset=offset, count=len(targets), stage=stage
+            )
+
+        if len(targets) > 1:
+            midpoint = len(targets) // 2
+            common = {
                 "glossary_terms": glossary_terms,
                 "style": style,
                 "context": context,
                 "book_synopsis": book_synopsis,
                 "chapter_digest": chapter_digest,
                 "narrative_facts": narrative_facts,
+                "stage": "PolisherRetry",
             }
-            try:
-                result = self._call(
-                    self.client,
-                    [target],
-                    stage="Polisher",
-                    **kwargs,
-                )
-            except ContentPolicyError:
-                result = None
-                if self.fallback_client is not None:
-                    try:
-                        result = self._call(
-                            self.fallback_client,
-                            [target],
-                            stage="PolisherPolicyFallback",
-                            **kwargs,
-                        )
-                    except Exception:
-                        result = None
-                    if result:
-                        self.last_policy_fallback_indexes.append(index)
-            except Exception:
-                result = None
-            if not result:
-                self.last_failed_indexes.append(index)
-            polished.append(result[0] if result else target)
-        return polished
+            return self._polish_partition(
+                targets[:midpoint],
+                sources=sources[:midpoint],
+                offset=offset,
+                **common,
+            ) + self._polish_partition(
+                targets[midpoint:],
+                sources=sources[midpoint:],
+                offset=offset + midpoint,
+                **common,
+            )
+
+        return [self._fallback_leaf(
+            targets[0],
+            source=sources[0],
+            glossary_terms=glossary_terms,
+            style=style,
+            context=context,
+            book_synopsis=book_synopsis,
+            chapter_digest=chapter_digest,
+            narrative_facts=narrative_facts,
+            offset=offset,
+            policy_rejected=policy_rejected,
+        )]
 
     def polish(
         self,
@@ -135,66 +282,36 @@ class Polisher(Agent):
         chapter_digest: str = "",
         narrative_facts: str = "",
     ) -> list[str]:
-        """对照原文精修；policy 拒绝时逐段定位并只回退问题段。"""
+        """对照原文精修；批级失败二分，叶子失败才调用对应备用模型。"""
+        self.last_failed_indexes = []
+        self.last_policy_context_fallback_indexes = []
+        self.last_policy_fallback_indexes = []
+        self.last_recovery_fallback_indexes = []
+        self.last_failure_details = []
         if not targets:
             return []
         sources = list(sources or [""] * len(targets))
-        self.last_failed_indexes = []
-        self.last_policy_context_fallback_indexes: list[int] = []
         if len(sources) != len(targets):
             self.last_failed_indexes = list(range(len(targets)))
+            self._record_failure(
+                PolishResponseError(
+                    f"精修原文与初译段数不符：{len(sources)} != {len(targets)}"
+                ),
+                offset=0,
+                count=len(targets),
+                stage="PolisherInput",
+            )
             return list(targets)
         terms = glossary_terms or []
-        self.last_policy_fallback_indexes = []
-        try:
-            result = self._call(
-                self.client,
-                targets,
-                sources=sources,
-                glossary_terms=terms,
-                style=style,
-                context=context,
-                book_synopsis=book_synopsis,
-                chapter_digest=chapter_digest,
-                narrative_facts=narrative_facts,
-                stage="Polisher",
-            )
-        except ContentPolicyError:
-            try:
-                result = self._call(
-                    self.client,
-                    targets,
-                    sources=sources,
-                    glossary_terms=terms,
-                    style=style,
-                    context="",
-                    book_synopsis="",
-                    chapter_digest="",
-                    narrative_facts=narrative_facts,
-                    stage="PolisherContextFallback",
-                )
-            except ContentPolicyError:
-                result = None
-            except Exception:
-                result = None
-            if result is not None:
-                self.last_policy_context_fallback_indexes = list(
-                    range(len(targets))
-                )
-                return result
-            return self._polish_after_policy_rejection(
-                targets,
-                sources=sources,
-                glossary_terms=terms,
-                style=style,
-                context=context,
-                book_synopsis=book_synopsis,
-                chapter_digest=chapter_digest,
-                narrative_facts=narrative_facts,
-            )
-        except Exception:
-            result = None
-        if result is None:
-            self.last_failed_indexes = list(range(len(targets)))
-            return list(targets)
-        return result
+        return self._polish_partition(
+            targets,
+            sources=sources,
+            glossary_terms=terms,
+            style=style,
+            context=context,
+            book_synopsis=book_synopsis,
+            chapter_digest=chapter_digest,
+            narrative_facts=narrative_facts,
+            offset=0,
+            stage="Polisher",
+        )

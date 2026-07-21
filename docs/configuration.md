@@ -67,6 +67,31 @@ translation. Whole-book/chapter future summaries are included only when
 Without `translation_llm`, first drafts continue to use the main `llm` for
 backward compatibility. API keys remain environment-only.
 
+### Separate refinement-recovery model
+
+`polish_fallback_llm` is optional. When a main-model refinement response is
+malformed, empty, misaligned, or fails at the provider boundary, Wenyi first
+recursively splits the failed batch and retries the main model. Only a
+single-segment leaf that still fails is sent to this recovery model. The
+original draft remains pending if both models fail.
+
+```yaml
+polish_fallback_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/you/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    strong:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+```
+
+Failure type, recursive range, and recovery-model indexes are persisted in the
+batch event log. Explicit content-policy rejections still use the existing
+context-stripping and `translation_llm` path first.
+
 ### Separate final-review model
 
 `review_llm` optionally assigns only the independent final-review pass to a
@@ -88,8 +113,9 @@ review_llm:
 ```
 
 This adapter launches an ephemeral `codex exec` process in a read-only sandbox,
-sends the request through stdin, and explicitly forbids tools or file access. It
-is intended for final review rather than every small translation batch.
+sends the request through stdin, and explicitly forbids tools or file access.
+It can serve final review or the rare failed refinement leaf without replacing
+the primary translation/refinement models.
 
 The first PDF import also reads `MINERU_API_KEY` to call the MinerU conversion service. This key is independent of the LLM provider and is not written to `config.yaml`.
 

@@ -41,8 +41,20 @@ translation_llm:
     fast:
       model: Gemini 3.5 Flash (Medium)
 
+# 精修恢复专用：Gemini Pro 批级失败会先递归拆分；只有仍失败的单段才交给 Codex。
+polish_fallback_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/Meta/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    strong:
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+
 # 独立终审：Codex Sol High 只负责找错；严重项仍由主 llm 的 Gemini Pro High 定向修复。
-# Codex 以无状态、只读、禁止工具的 CLI Adapter 运行，不参与每个正文小批次。
+# Codex 以无状态、只读、禁止工具的 CLI Adapter 运行；精修时仅接管主模型仍失败的叶子。
 review_llm:
   provider: codex-cli
   command: codex

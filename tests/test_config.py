@@ -147,6 +147,29 @@ class TestConfigFileCreation(unittest.TestCase):
         self.assertEqual(cfg.review_llm.provider, "codex-cli")
         self.assertEqual(cfg.review_llm.tiers["cheap"].model, "gpt-5.6-sol")
 
+    def test_polish_fallback_llm_is_loaded_independently(self):
+        cfg = Config.from_dict({
+            "llm": {"provider": "agy"},
+            "polish_fallback_llm": {
+                "provider": "codex-cli",
+                "command": "codex",
+                "tiers": {
+                    "strong": {
+                        "model": "gpt-5.6-sol",
+                        "options": {"reasoning_effort": "high"},
+                    }
+                },
+            },
+        })
+
+        self.assertIsNotNone(cfg.polish_fallback_llm)
+        assert cfg.polish_fallback_llm is not None
+        self.assertEqual(cfg.polish_fallback_llm.provider, "codex-cli")
+        self.assertEqual(
+            cfg.polish_fallback_llm.tiers["strong"].model,
+            "gpt-5.6-sol",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

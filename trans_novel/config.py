@@ -52,6 +52,18 @@ llm:
 #       options:
 #         reasoning_effort: high
 
+# 可选：主精修模型在坏 JSON、漏项或 CLI 异常后仍无法完成单段时，
+# 才把该失败叶子交给独立恢复模型。省略时保留初译并标记 refinement pending。
+# polish_fallback_llm:
+#   provider: codex-cli
+#   command: codex
+#   timeout: 1200
+#   tiers:
+#     strong:
+#       model: gpt-5.6-sol
+#       options:
+#         reasoning_effort: high
+
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:
   # 一个翻译批次（句群）的目标大小，按字符粗略估算 token。
@@ -166,6 +178,7 @@ class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     translation_llm: LLMConfig | None = None
     review_llm: LLMConfig | None = None
+    polish_fallback_llm: LLMConfig | None = None
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
@@ -210,6 +223,12 @@ class Config(BaseModel):
             if isinstance(review_raw, dict)
             else None
         )
+        polish_fallback_raw = raw.get("polish_fallback_llm")
+        polish_fallback_llm = (
+            _parse_llm_config(polish_fallback_raw)
+            if isinstance(polish_fallback_raw, dict)
+            else None
+        )
         segment = SegmentConfig.model_validate(raw.get("segment", {}) or {})
         pipeline = PipelineConfig.model_validate(raw.get("pipeline", {}) or {})
         output = OutputConfig.model_validate(raw.get("output", {}) or {})
@@ -220,6 +239,7 @@ class Config(BaseModel):
             llm=llm,
             translation_llm=translation_llm,
             review_llm=review_llm,
+            polish_fallback_llm=polish_fallback_llm,
             segment=segment,
             pipeline=pipeline,
             output=output,
