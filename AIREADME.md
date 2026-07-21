@@ -126,4 +126,4 @@
 - [x] 2026-07-22 恢复代码正式续跑已将 ch62/79/109/111/131 共 176 个精修缺口全部清零；137 章翻译状态均为 done，标题翻译完成，2 条术语冲突已裁定。
 - [x] 发现旧路由把 Codex Sol 找出的严重项交给 Gemini Pro 修复；在 ch0–ch4 审完、10 次 Pro 修复落盘后终止进程，依据事件日志逐项验证并回滚 ch1/ch2/ch4 的 10 个 target 与 TM，备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-review-sol-route-20260722-015455\state-before-rollback`。
 - [x] `review_fixer` 已改为跟随 `review_client`，审校摘要加入 strong 修复模型指纹并升级 schema；专项 61 项通过，完整测试 302 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
-- [ ] 从回滚断点重启 Codex Sol 全书终审及严重项修复；完成后继续 QA、报告、EPUB 组装与结构验收。
+- [ ] 2026-07-22 01:57:35 已从回滚断点重启一键流程（PID 48436）：翻译与标题阶段确认全部完成并跳过，01:57:48 进入 Codex Sol 全书终审，ch0 已重审；实时子进程为 `codex exec --model gpt-5.6-sol` high，未发现 AGY 子进程，stderr 为空。stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260722-015735.*.log`；终审完成后将自动继续 QA、报告、EPUB 组装与结构验收。
