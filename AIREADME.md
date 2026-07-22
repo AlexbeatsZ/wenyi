@@ -131,8 +131,10 @@
 - [x] `review_fixer` 已改为跟随 `review_client`，审校摘要加入 strong 修复模型指纹并升级 schema；专项 61 项通过，完整测试 302 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
 - [x] 2026-07-22 01:57:35 从回滚断点重启的一键流程已于 07:08:52 全部完成：137/137 章翻译与 Codex Sol 终审完成，0 pending/running/failed；共报告 927 项，其中 504 项 missing/mistranslation 已自动修复，423 项 terminology/added/pronoun 保留为报告；一致性 QA 完成并报告 4 项，EPUB 已组装。
 - [x] 将 Gemini 3.5 Flash 默认值和本机高质量配置直接升级为 Gemini 3.6 Flash；保留 3.5 兼容映射，真实 3.6 Medium 烟测返回 `WENYI36_OK`。专项 27 项通过，完整测试 304 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
-- [ ] 最终译文粗检确认 16,593/16,593 段均非空、长度分布无明显整批截断；Sol 已修复此前大部分污染，但仍至少残留 ch107:68、ch114:28 两处 `原文 -> 译文` 包装，以及 ch58:23、ch135:24 两处英文 `me` 混入；另有 `明先生` 的性别称谓错误及 `惠奈姐/惠奈桑`、`安奈姐/安奈桑` 不一致，尚未达到出版级终稿。
+- [x] 最终译文粗检确认 16,593/16,593 段均非空、长度分布无明显整批截断；2026-07-23 已手工修正 ch107:68、ch114:28 两处 `原文 -> 译文` 包装及 ch58:23、ch135:24 两处英文 `me` 混入，并按全书中文主流称呼将 113 处“明先生”统一为“明姐”、14 处“安奈桑”统一为“安奈姐”、35 处“惠奈桑”统一为“惠奈姐”。
 - [x] 复核 Sol 前 36 章审校：共报告 124 项，87 项 missing/mistranslation 已修复，29 项术语、6 项增译、2 项代词问题仅报告，0 次修复拒绝、0 章失败。抽查改动相似度最低的 16 项，均有原文依据且整体改善；ch22 的 `期間限定` 残留已被识别并修复。风险点是所有 87 个候选都仅通过长度/标点门直接采纳，尚无独立语义复验。
 - [x] 2026-07-22 重新验证并启动只读局域网 reader：自带 3 项测试通过，绑定干净重译 state 与 `0.0.0.0:8765`；本机及 WLAN `192.168.31.214` 的主页、健康、全书和章节 API 均返回成功，137 章与 16,593/16,593 段可读，审校进度实时刷新。后台根 PID 21936，日志位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-reader\reader-20260722-031901.*.log`。
 - [x] 2026-07-23 诊断“reader 总打开旧译文”：旧后台服务已退出，旧命令 `state/<书名>` 指向历史状态；当前成品须使用 `uv run python -u reader/app.py "state/revisions/20260721_clean/<书名>" --host 0.0.0.0 --port 8765`，并为含日文波浪号的控制台输出设置 `PYTHONIOENCODING=utf-8`。
 - [x] 最终 EPUB 结构校验通过（141 files，`7z t` Everything is Ok），SHA-256 为 `5307F87C0CEC93F6F92EA7EFE5A805B4CB0ABC2A6DD7115F68D9DEF68E760D1F`；成品位于 `C:\Users\Meta\Project\Scripts\JavaScript\work-crawler\kakuyomu\output\[榊ダダ] 屈曲ラヴァー〜身を滅ぼしてしまいそうな初恋〜.zh.epub`。
+- [x] 2026-07-23 手工修正后重新生成 report 与 EPUB；状态和 EPUB 内 `躺 me`、`前辈 me`、` -> `、`明先生`、`安奈桑`、`惠奈桑` 均归零，137 个 JSON/16,593 段可解析且无空目标，EPUB 141 文件结构验证通过，新 SHA-256 为 `356C294B79622CA985D3830B9FCC7617A42006135AC7F9DB4EDE0905B0D391D4`。修正前文件备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-manual-fix-20260723-033357`。
+- [x] 同步验证当前局域网 reader（`0.0.0.0:8765`，PID 34324）：`/api/book` 返回 137 章，ch58/ch107/ch114/ch135 API 均返回修正后的目标段；浏览器刷新或重新进入章节即可读取新版。
