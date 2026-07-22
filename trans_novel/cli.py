@@ -454,7 +454,7 @@ def review(
     fix: Optional[bool] = typer.Option(
         None,
         "--fix/--no-fix",
-        help="覆盖 pipeline.autofix_severe；开启后串行修复漏译和误译",
+        help="覆盖 pipeline.autofix_severe；开启后串行修复漏译、误译和增译",
     ),
     resolve_conflicts: Optional[bool] = typer.Option(
         None,

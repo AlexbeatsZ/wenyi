@@ -80,7 +80,7 @@ segment:
 # ── 流水线开关（质量/成本平衡）───────────────────────────────────────────
 pipeline:
   review: true # 一键高质量模式：正文完成后自动使用 Codex Sol High 最终审校
-  autofix_severe: true # 最终审校后由同一个 Codex Sol High 定向修复严重项（漏译/误译）
+  autofix_severe: true # 最终审校后由同一个 Codex Sol High 定向修复严重项（漏译/误译/增译）
   auto_resolve_glossary_conflicts: true # 审校前由 AGY Gemini 自动裁定未决术语冲突
   align_retry_limit: 2
   polish: true # 润色（强档）：等于用 pro 把全书再翻一遍，最烧钱；默认开

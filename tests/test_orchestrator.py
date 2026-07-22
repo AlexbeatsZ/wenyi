@@ -572,26 +572,26 @@ class TestReviewReporting(unittest.TestCase):
     # 样例首段「第一章　出会い」7 字；fix 需在 3-21 字间（比值 0.3-3.0）方可通过长度校验
     FIX_TEXT = "第一章 邂逅"   # 7 字，比值 1.0
 
-    def _handler(self, fix_text):
+    def _handler(self, fix_text, issue_type="missing"):
         """审校每块报 index 0 漏译；带【审校意见】的翻译调用返回定向重译文。"""
         def handler(messages, tier, json_mode):
             sys = messages[0]["content"]
             user = messages[-1]["content"]
             if "译文审校" in sys:
                 return json.dumps({"issues": [
-                    {"index": 0, "type": "missing", "detail": "漏了一句", "suggestion": "补上"}
+                    {"index": 0, "type": issue_type, "detail": "审校问题", "suggestion": "修正"}
                 ]}, ensure_ascii=False)
             if "文学翻译" in sys and "【审校意见】" in user:
                 return json.dumps({"translations": [fix_text]}, ensure_ascii=False)
             return routing_handler(messages, tier, json_mode)
         return handler
 
-    def _run(self, d, *, autofix, fix_text=None):
+    def _run(self, d, *, autofix, fix_text=None, issue_type="missing"):
         txt = os.path.join(d, "novel.txt")
         write_sample_txt(txt)
         cfg = _config(os.path.join(d, "state"))
         cfg.pipeline.autofix_severe = autofix
-        handler = self._handler(fix_text or self.FIX_TEXT)
+        handler = self._handler(fix_text or self.FIX_TEXT, issue_type=issue_type)
         orch = Orchestrator(cfg, client=FakeClient(handler=handler))
         orch.run(txt)
         return orch.run_review(txt, autofix=autofix)["store"]
@@ -638,6 +638,16 @@ class TestReviewReporting(unittest.TestCase):
                 )
             finally:
                 glossary.close()
+
+    def test_autofix_adopts_added_retranslation(self):
+        """增译/混入同样由审校模型定向修复，不能只报告后进入成品。"""
+        with tempfile.TemporaryDirectory() as d:
+            store = self._run(d, autofix=True, issue_type="added")
+            ch = store.load_chapter(0)
+            flagged = [i for i in ch.meta["review_issues"] if i.get("type") == "added"]
+            self.assertTrue(flagged)
+            self.assertTrue(all(i.get("fixed") is True for i in flagged))
+            self.assertEqual(ch.text_segments[0].target, self.FIX_TEXT)
 
     def test_autofix_uses_main_review_client_not_translation_client(self):
         """Gemini 审校后的定向修复仍走主 llm，不回落到 DeepSeek 初译客户端。"""

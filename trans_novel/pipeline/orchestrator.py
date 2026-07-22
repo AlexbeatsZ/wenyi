@@ -1316,8 +1316,8 @@ class Orchestrator:
         return summary
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
-    _SEVERE_TYPES = ("missing", "mistranslation")
-    _REVIEW_SCHEMA_VERSION = 5
+    _SEVERE_TYPES = ("missing", "mistranslation", "added")
+    _REVIEW_SCHEMA_VERSION = 6
     _GLOSSARY_ARBITER_BATCH_CHARS = 4500
     _GLOSSARY_DECISION_ATTEMPTS = 2
 
@@ -1870,7 +1870,7 @@ class Orchestrator:
                         knowledge: NarrativeKnowledge | None = None,
                         store: RunStore | None = None,
                         chapter_index: int | None = None) -> None:
-        """对审校严重项（漏译/误译）带审校意见定向重译，每段最多一次。
+        """对审校严重项（漏译/误译/增译）带审校意见定向重译，每段最多一次。
 
         采纳条件 = 重译非空且过长度校验：采纳则标点规范化后更新 seg.target 并标 fixed=True；
         不采纳保持 fixed=False 留人工。最终审校重译时原滚动上下文已失效，

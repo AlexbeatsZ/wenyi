@@ -51,6 +51,8 @@
 - 精修返回原初译不是成功。`require_polish_success` 将失败段号持久化，并能从旧 `batch_translated` 事件恢复；回头重试早期章节时必须按书序重建前文上下文，不能误用最后已译章节的滚动尾部。
 - Codex CLI 适合作为独立 `review_llm`：用 ephemeral/read-only/no-tools 文本 Adapter 完成审校和严重项修复，形成 Sol 发现、Sol 修复的闭环。Windows 上 `codex exec review` 的工具型只读沙箱可能因 `CreateProcessAsUserW 1312` 无法启动 PowerShell，但纯文本审校 Adapter 已真实通过。
 - 能用脚本快速发现日文残留，不等于应把多阶段流水线改成单模型独译：这是确定性 QA 缺失的证据。当前无模型 `pipeline.checks` 只有空值/长度比门，Sol 自动修复也只以非空、长度与标点决定采纳；应补目标语言残留、`原文 -> 译文` 包装、重复词和引号边界等前后置硬门，再保留独立模型审校处理语义问题。
+- 拉丁字母污染不能只按已知短语或空格边界搜索：`过去 me一个月`、`me在她身后`、`您 me是` 分别与中文空格/标点/汉字相邻。应对全部目标段提取 `[A-Za-z]+` 词元，再结合原文、专名、单位和人物语气人工裁定；本书 320 个拉丁词元中，`Mylas`、`Out Base`、`Livehouse`、`CD/ID/ml/cm` 等有依据，真正异常的是 `me/Word/photo/shared`。
+- 本书事件日志证明 `me/Word/photo/shared` 在 `batch_translated`（Gemini 3.5 Flash 初译 + Gemini 3.1 Pro 精修后的持久化结果）中已经存在；现有事件没有保存精修前中间译文，因此不能再区分由 Flash 还是 Pro 首次引入。Sol 随后全部准确报告为 `added`，但旧 `_SEVERE_TYPES` 只有 `missing/mistranslation`，导致 `fixed: false` 进入成品；不是编码损坏，也不是 Sol 漏检。
 
 - “状态表跳过章节、持续往后翻译”不等于正文漏译：`pending` 同时表示正文已齐但仍有 `refinement_pending_indexes`。普通续跑在启动时按书序抓取一次 pending 快照，每章精修失败后保留 pending 并继续下一章，不会在同一轮原地无限重试。
 - 2026-07-22 续跑从事件日志恢复 21 章共 1000 个待精修段，成功补回 711 个；结束时全书 target 均非空，仅 ch62/79/109/111/131/132/135 共 289 段仍未通过 Pro 精修。持续失败批次提示词约 3412–7146 字符，排除 Windows 命令行过长；当前 `Polisher` 会吞掉非策略异常及无效/不等长输出，只落失败索引，因此现有状态无法区分坏 JSON、数组不等长或 AGY CLI 异常。
@@ -138,3 +140,6 @@
 - [x] 最终 EPUB 结构校验通过（141 files，`7z t` Everything is Ok），SHA-256 为 `5307F87C0CEC93F6F92EA7EFE5A805B4CB0ABC2A6DD7115F68D9DEF68E760D1F`；成品位于 `C:\Users\Meta\Project\Scripts\JavaScript\work-crawler\kakuyomu\output\[榊ダダ] 屈曲ラヴァー〜身を滅ぼしてしまいそうな初恋〜.zh.epub`。
 - [x] 2026-07-23 手工修正后重新生成 report 与 EPUB；状态和 EPUB 内 `躺 me`、`前辈 me`、` -> `、`明先生`、`安奈桑`、`惠奈桑` 均归零，137 个 JSON/16,593 段可解析且无空目标，EPUB 141 文件结构验证通过，新 SHA-256 为 `356C294B79622CA985D3830B9FCC7617A42006135AC7F9DB4EDE0905B0D391D4`。修正前文件备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-manual-fix-20260723-033357`。
 - [x] 同步验证当前局域网 reader（`0.0.0.0:8765`，PID 34324）：`/api/book` 返回 137 章，ch58/ch107/ch114/ch135 API 均返回修正后的目标段；浏览器刷新或重新进入章节即可读取新版。
+- [x] 2026-07-23 全书拉丁字母审计发现并修正另外 6 处确定污染：ch34:34 `Word`、ch39:6 `me`、ch67:110 `photo`、ch73:19 `me`、ch88:7 `shared`、ch110:121 `me`；连同上轮 4 处手工修正，相关审校记录均标记 `fixed: true`，报告现为 927 项中 514 fixed、413 unfixed。
+- [x] 将审校 `added` 纳入 `_SEVERE_TYPES` 并将 review schema 升至 v6，未来增译/随机英文混入会由发现问题的同一个 `review_llm`（当前为 Codex Sol）串行定向修复，已有旧审校缓存也会失效重审；新增回归测试先在旧行为下失败，修复后审校专项 18 项通过，完整测试 305 项与 15 个子测试通过，仅余 2 项既有 Windows `/tmp/output` 路径断言失败。
+- [x] 修正已同步当前局域网 reader：137 章 API 中 `me/Word/photo/shared` 可见正文命中为 0，6 个目标段均返回新译文；EPUB 重组后 141 文件结构测试通过、剥离 HTML 标签后的可见正文命中为 0，新 SHA-256 为 `FC611D722EA02CC174A1886060961CD07CFA32902E4A532DC397BFD0E3AF541C`。修正前备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-latin-cleanup-20260723-042425`。
