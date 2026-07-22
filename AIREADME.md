@@ -129,8 +129,10 @@
 - [x] 2026-07-22 恢复代码正式续跑已将 ch62/79/109/111/131 共 176 个精修缺口全部清零；137 章翻译状态均为 done，标题翻译完成，2 条术语冲突已裁定。
 - [x] 发现旧路由把 Codex Sol 找出的严重项交给 Gemini Pro 修复；在 ch0–ch4 审完、10 次 Pro 修复落盘后终止进程，依据事件日志逐项验证并回滚 ch1/ch2/ch4 的 10 个 target 与 TM，备份位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-review-sol-route-20260722-015455\state-before-rollback`。
 - [x] `review_fixer` 已改为跟随 `review_client`，审校摘要加入 strong 修复模型指纹并升级 schema；专项 61 项通过，完整测试 302 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
-- [ ] 2026-07-22 01:57:35 已从回滚断点重启一键流程（PID 48436）：翻译与标题阶段确认全部完成并跳过，01:57:48 进入 Codex Sol 全书终审，ch0 已重审；实时子进程为 `codex exec --model gpt-5.6-sol` high，未发现 AGY 子进程，stderr 为空。stdout/stderr 位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-agy-runtime\translate-20260722-015735.*.log`；终审完成后将自动继续 QA、报告、EPUB 组装与结构验收。
+- [x] 2026-07-22 01:57:35 从回滚断点重启的一键流程已于 07:08:52 全部完成：137/137 章翻译与 Codex Sol 终审完成，0 pending/running/failed；共报告 927 项，其中 504 项 missing/mistranslation 已自动修复，423 项 terminology/added/pronoun 保留为报告；一致性 QA 完成并报告 4 项，EPUB 已组装。
 - [x] 将 Gemini 3.5 Flash 默认值和本机高质量配置直接升级为 Gemini 3.6 Flash；保留 3.5 兼容映射，真实 3.6 Medium 烟测返回 `WENYI36_OK`。专项 27 项通过，完整测试 304 项与 15 个子测试通过，仅 2 项既有 Windows `/tmp/output` 路径断言失败。
-- [ ] 译文粗检确认 16,593/16,593 段均非空、长度分布无明显整批截断；同时发现至少 13 段存在实质日文残留或 `原文 -> 译文` 包装污染（集中于 ch22/ch45/ch50/ch69/ch93/ch100/ch107/ch108/ch114/ch130/ch133），待当前 Sol 终审推进后复核是否全部识别并修复。
+- [ ] 最终译文粗检确认 16,593/16,593 段均非空、长度分布无明显整批截断；Sol 已修复此前大部分污染，但仍至少残留 ch107:68、ch114:28 两处 `原文 -> 译文` 包装，以及 ch58:23、ch135:24 两处英文 `me` 混入；另有 `明先生` 的性别称谓错误及 `惠奈姐/惠奈桑`、`安奈姐/安奈桑` 不一致，尚未达到出版级终稿。
 - [x] 复核 Sol 前 36 章审校：共报告 124 项，87 项 missing/mistranslation 已修复，29 项术语、6 项增译、2 项代词问题仅报告，0 次修复拒绝、0 章失败。抽查改动相似度最低的 16 项，均有原文依据且整体改善；ch22 的 `期間限定` 残留已被识别并修复。风险点是所有 87 个候选都仅通过长度/标点门直接采纳，尚无独立语义复验。
 - [x] 2026-07-22 重新验证并启动只读局域网 reader：自带 3 项测试通过，绑定干净重译 state 与 `0.0.0.0:8765`；本机及 WLAN `192.168.31.214` 的主页、健康、全书和章节 API 均返回成功，137 章与 16,593/16,593 段可读，审校进度实时刷新。后台根 PID 21936，日志位于 `%LOCALAPPDATA%\Temp\.agents\wenyi-reader\reader-20260722-031901.*.log`。
+- [x] 2026-07-23 诊断“reader 总打开旧译文”：旧后台服务已退出，旧命令 `state/<书名>` 指向历史状态；当前成品须使用 `uv run python -u reader/app.py "state/revisions/20260721_clean/<书名>" --host 0.0.0.0 --port 8765`，并为含日文波浪号的控制台输出设置 `PYTHONIOENCODING=utf-8`。
+- [x] 最终 EPUB 结构校验通过（141 files，`7z t` Everything is Ok），SHA-256 为 `5307F87C0CEC93F6F92EA7EFE5A805B4CB0ABC2A6DD7115F68D9DEF68E760D1F`；成品位于 `C:\Users\Meta\Project\Scripts\JavaScript\work-crawler\kakuyomu\output\[榊ダダ] 屈曲ラヴァー〜身を滅ぼしてしまいそうな初恋〜.zh.epub`。
