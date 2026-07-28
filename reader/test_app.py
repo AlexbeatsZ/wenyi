@@ -78,7 +78,8 @@ class ReaderAppTest(unittest.TestCase):
             self.assertEqual(payload["title"], "测试小说")
             with urlopen(base, timeout=3) as response:
                 html = response.read().decode("utf-8")
-            self.assertIn("每分钟自动查询", html)
+            self.assertNotIn("setInterval(queryUpdates", html)
+            self.assertIn("需要查看进度或新译文时", html)
             self.assertIn("立即查询", html)
             self.assertIn("显示原文", html)
             self.assertIn("#0b0d10", html)

@@ -208,7 +208,6 @@
   <div id="notice" class="notice" role="status"></div>
 
   <script>
-    const POLL_INTERVAL_MS = 60_000;
     const FONT_SIZES = [17, 19, 21, 23];
     const state = {
       book: null,
@@ -331,7 +330,7 @@
           : `<div class="segment-pair"><p>${text}</p><p class="source-text" lang="ja">${source}</p></div>`;
       }).join("");
       const waiting = chapter.translated_segments < chapter.total_segments
-        ? `<div class="waiting">本章仍在翻译：${chapter.translated_segments}/${chapter.total_segments} 段<br>可点击“立即查询”，或等待每分钟自动查询。</div>`
+        ? `<div class="waiting">本章仍在翻译：${chapter.translated_segments}/${chapter.total_segments} 段<br>需要查看进度或新译文时，请点击“立即查询”。</div>`
         : "";
       elements.content.innerHTML = html || `<div class="waiting">本章尚未产生译文。</div>`;
       if (html && waiting) elements.content.insertAdjacentHTML("beforeend", waiting);
@@ -408,7 +407,6 @@
     updateFont();
     updateCompareMode();
     queryUpdates();
-    setInterval(queryUpdates, POLL_INTERVAL_MS);
   </script>
 </body>
 </html>
