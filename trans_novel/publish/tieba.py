@@ -85,7 +85,7 @@ def chapter_paragraphs(chapter: Chapter) -> list[str]:
 
 
 def _split_paragraphs(paragraphs: Iterable[str], limit: int) -> list[list[str]]:
-    """在不超过字符预算的前提下优先按段落切分。"""
+    """在不超过字符预算的前提下优先按段落切分，并平衡过短的末层。"""
     if limit < 200:
         raise ValueError("单层字符上限不能小于 200")
 
@@ -112,10 +112,25 @@ def _split_paragraphs(paragraphs: Iterable[str], limit: int) -> list[list[str]]:
         current_len += len(pending) + (2 if current_len else 0)
     if current:
         chunks.append(current)
+
+    def chunk_length(chunk: list[str]) -> int:
+        return sum(len(paragraph) for paragraph in chunk) + max(0, len(chunk) - 1) * 2
+
+    for index in range(len(chunks) - 1, 0, -1):
+        while (
+            chunk_length(chunks[index]) < limit * 0.4
+            and len(chunks[index - 1]) > 1
+        ):
+            candidate = chunks[index - 1][-1]
+            balanced = [candidate, *chunks[index]]
+            if chunk_length(balanced) > limit:
+                break
+            chunks[index - 1].pop()
+            chunks[index] = balanced
     return chunks
 
 
-def build_chapter_parts(chapter: Chapter, *, max_chars: int = 8000) -> list[PublishPart]:
+def build_chapter_parts(chapter: Chapter, *, max_chars: int = 1950) -> list[PublishPart]:
     """把一个逻辑章变成一层或多层带唯一标记的回复。"""
     marker_budget = len(f"【第{chapter.index}话（999/999）】\n\n")
     chunks = _split_paragraphs(
@@ -149,7 +164,7 @@ def build_publish_plan(
     *,
     start: int = 1,
     end: int | None = None,
-    max_chars: int = 8000,
+    max_chars: int = 1950,
 ) -> list[PublishPart]:
     """从翻译状态构建一个闭区间发布计划。"""
     manifest = store.load_manifest()
@@ -243,11 +258,8 @@ class PublishJournal:
 
 
 def default_profile_dir() -> Path:
-    """返回符合本机任务文件约束的专用 Chrome 配置目录。"""
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise TiebaPublishError("找不到 LOCALAPPDATA，必须通过 --profile-dir 指定目录")
-    return Path(local_app_data) / "Temp" / ".agents" / "wenyi-tieba-publisher" / "chrome-profile"
+    """返回项目内持久、且不会提交到 Git 的专用 Chrome 配置目录。"""
+    return Path.cwd() / "state" / "publish" / "tieba-chrome-profile"
 
 
 class TiebaBrowserPublisher:
@@ -257,7 +269,7 @@ class TiebaBrowserPublisher:
         self,
         *,
         profile_dir: str | Path,
-        prompt: Callable[[str], str] = input,
+        prompt: Callable[[str], object] = print,
     ):
         self.profile_dir = Path(profile_dir)
         self.prompt = prompt
@@ -282,12 +294,12 @@ class TiebaBrowserPublisher:
                 channel="chrome",
                 headless=False,
                 viewport=None,
+                args=["--hide-crash-restore-bubble"],
             )
-            self.page = (
-                self.context.pages[0]
-                if self.context.pages
-                else self.context.new_page()
-            )
+            restored_pages = list(self.context.pages)
+            self.page = self.context.new_page()
+            for restored_page in restored_pages:
+                restored_page.close()
             self.page.set_default_timeout(15_000)
         except playwright_api.Error as error:
             if self._playwright is not None:
@@ -306,27 +318,58 @@ class TiebaBrowserPublisher:
                 self._playwright.stop()
 
     def open_thread(self, thread_url: str) -> None:
-        """打开目标主题；专用配置未登录时等待用户自行完成登录。"""
+        """打开目标主题；专用配置未登录时在可见窗口等待用户完成登录。"""
         try:
-            self.page.goto(thread_url, wait_until="domcontentloaded")
+            self._goto_thread(thread_url)
             if self._open_editor():
                 return
+            login_page = self.context.new_page()
+            login_page.goto("https://tieba.baidu.com/", wait_until="domcontentloaded")
+            login_page.bring_to_front()
             self.prompt(
-                "请在刚打开的 Chrome 窗口中登录百度贴吧；完成后回到此处按回车。"
+                "目标主题在未登录的专用 Chrome 中可能显示 404。"
+                "请在已经打开的贴吧首页标签页登录；"
+                "脚本会等待最多 10 分钟并自动继续。"
             )
-            self.page.reload(wait_until="domcontentloaded")
-            if not self._open_editor():
-                raise TiebaPublishError("仍未找到贴吧回复框，请确认账号可在该主题回复")
+            deadline = time.monotonic() + 600
+            while time.monotonic() < deadline:
+                self._goto_thread(thread_url)
+                if self._open_editor():
+                    self.page.bring_to_front()
+                    login_page.close()
+                    return
+                time.sleep(10)
+            raise TiebaPublishError("等待登录超时，请确认账号可在该主题回复")
         except self._browser_error as error:
             raise TiebaPublishError(f"无法打开贴吧主题：{error}") from error
 
+    def _goto_thread(self, thread_url: str) -> None:
+        """导航到主题，并容忍登录完成瞬间由贴吧触发的同页跳转。"""
+        for attempt in range(3):
+            try:
+                self.page.goto(thread_url, wait_until="domcontentloaded")
+                return
+            except self._browser_error as error:
+                transient = "interrupted by another navigation" in str(error)
+                if not transient or attempt == 2:
+                    raise
+                self.page.wait_for_timeout(1_000)
+
     def _open_editor(self) -> bool:
+        reply_box = self.page.locator(".pc-pb-reply-box")
+        try:
+            reply_box.wait_for(state="visible", timeout=15_000)
+        except self._browser_timeout:
+            return False
         editor = self.page.locator(_EDITOR_SELECTOR)
         if editor.count() == 1 and editor.is_visible():
             return True
         collapsed = self.page.locator(".pc-pb-reply-box .reply-input")
         if collapsed.count() == 1:
-            collapsed.click()
+            try:
+                collapsed.click(timeout=2_000)
+            except self._browser_timeout:
+                return False
         editor = self.page.locator(_EDITOR_SELECTOR)
         try:
             editor.wait_for(state="visible", timeout=5_000)
@@ -335,9 +378,10 @@ class TiebaBrowserPublisher:
         return editor.count() == 1
 
     def post(self, part: PublishPart) -> None:
-        """填写一层并提交，等待编辑器清空作为成功信号。"""
+        """填写并提交一层，再从帖子楼层中核对标记和完整正文。"""
         try:
             self._post(part)
+            self._verify_post(part)
         except self._browser_error as error:
             raise TiebaPublishError(f"{part.marker} 浏览器操作失败：{error}") from error
 
@@ -346,16 +390,27 @@ class TiebaBrowserPublisher:
         if not self._open_editor():
             raise TiebaPublishError("贴吧回复框不可用，登录可能已失效")
         editor = self.page.locator(_EDITOR_SELECTOR)
-        editor.fill(part.body)
+        # Quill 会把传入的每个换行渲染为一个段落分隔；若直接传入双换行，
+        # 读取时会扩成四个换行，并可能让实际字数越过贴吧上限。
+        editor.fill(part.body.replace("\n\n", "\n"))
+        rendered = editor.inner_text()
+        if rendered != part.body:
+            raise TiebaPublishError(
+                f"{part.marker} 填入编辑器后的正文不一致，已停止发布"
+            )
         publish = self.page.locator(_PUBLISH_SELECTOR).filter(has_text="发布")
         if publish.count() != 1:
             raise TiebaPublishError("无法唯一定位贴吧发布按钮")
         classes = publish.get_attribute("class") or ""
         if "disabled" in classes:
             raise TiebaPublishError("贴吧发布按钮仍为禁用状态")
-        publish.click()
+        publish_center = publish.locator(".center")
+        if publish_center.count() != 1:
+            raise TiebaPublishError("无法定位贴吧发布按钮的可点击区域")
+        publish_center.click()
 
         deadline = time.monotonic() + 30
+        notified_security: set[str] = set()
         while time.monotonic() < deadline:
             if editor.count() == 0:
                 return
@@ -366,16 +421,43 @@ class TiebaBrowserPublisher:
                 return
             page_text = self.page.locator("body").inner_text(timeout=2_000)
             matched = next((text for text in _SECURITY_TEXTS if text in page_text), None)
-            if matched:
+            if matched and matched not in notified_security:
+                notified_security.add(matched)
                 self.prompt(
                     f"贴吧显示“{matched}”。请在浏览器中按页面要求处理，"
-                    "不要尝试绕过验证；处理完成后按回车。"
+                    "脚本会等待最多 10 分钟，不会尝试绕过验证。"
                 )
-                deadline = time.monotonic() + 30
+                deadline = time.monotonic() + 600
             time.sleep(1)
         raise TiebaPublishError(
             f"{part.marker} 提交后未确认成功；已保留为 submitting，"
             "请先在主题中人工核对，避免重复发布"
+        )
+
+    def _verify_post(self, part: PublishPart) -> None:
+        """确认新楼层唯一存在，且渲染后的正文没有缺失或串层。"""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            floor = self.page.locator(".pb-text-wrapper").filter(
+                has_text=part.marker
+            )
+            count = floor.count()
+            if count > 1:
+                raise TiebaPublishError(
+                    f"{part.marker} 在当前页面出现 {count} 次，疑似重复发布"
+                )
+            if count == 1:
+                actual = re.sub(r"\s+", "", floor.inner_text())
+                expected = re.sub(r"\s+", "", part.body)
+                if actual != expected:
+                    raise TiebaPublishError(
+                        f"{part.marker} 已出现，但楼层正文与发布计划不一致"
+                    )
+                return
+            time.sleep(1)
+        raise TiebaPublishError(
+            f"{part.marker} 提交后未在帖子中找到；已保留为 submitting，"
+            "请先人工核对，避免重复发布"
         )
 
 
@@ -392,7 +474,7 @@ def publish_plan(
     profile_dir: str | Path,
     delay_seconds: float,
     jitter_seconds: float,
-    prompt: Callable[[str], str] = input,
+    prompt: Callable[[str], object] = print,
     progress: Callable[[str], None] = print,
 ) -> None:
     """按计划顺序发布，已完成层自动跳过，模糊状态停止等待人工核对。"""
@@ -426,6 +508,7 @@ def publish_plan(
                     journal.mark(part, "submitting", error=str(error))
                     raise
                 journal.mark(part, "posted")
+                progress(f"已核对 {part.marker}：楼层唯一且正文完整")
                 if position < len(pending):
                     wait = max(0.0, delay_seconds) + random.uniform(
                         0.0, max(0.0, jitter_seconds)

@@ -121,10 +121,12 @@ uv run trans-novel assemble book.epub
 uv run trans-novel tieba-publish .\book.epub "https://tieba.baidu.com/p/主题ID"
 ```
 
-建议先只发第一话。首次运行会打开一个专用 Chrome 窗口，需要在该窗口中登录
-一次百度账号；登录状态保存在
-`%LOCALAPPDATA%\Temp\.agents\wenyi-tieba-publisher\chrome-profile`，不会读取
-日常 Chrome 配置：
+建议先只发第一话。首次运行会打开一个专用 Chrome 窗口；未登录时目标主题
+可能显示 404，脚本会另开贴吧首页标签页。请在 10 分钟内于首页完成百度账号
+登录，脚本检测到登录成功后会自动切回目标主题。登录状态保存在
+项目的 `state/publish/tieba-chrome-profile`，该目录已被 Git 忽略，也不会读取
+日常 Chrome 配置。首次登录后，后续运行会自动复用 Cookie 和本地登录状态；
+只有百度让会话过期或触发安全验证时才需要重新登录：
 
 ```powershell
 uv run trans-novel tieba-publish .\book.epub "https://tieba.baidu.com/p/主题ID" `
@@ -138,7 +140,11 @@ uv run trans-novel tieba-publish .\book.epub "https://tieba.baidu.com/p/主题ID
   --start 2 --publish
 ```
 
-默认每层间隔 60 秒并增加最多 15 秒随机等待。可用 `--delay`、`--jitter` 和
-`--max-chars` 调整，但不建议为了速度显著缩短间隔。若页面出现验证码或安全
-验证，脚本只会暂停并等待人工处理，不会尝试绕过。提交过程中异常退出的层会
-保留为 `submitting`，再次运行前必须先人工核对主题与断点文件，以免重复发帖。
+贴吧当前网页端每层最多 2000 字，命令默认使用 1950 字安全上限，并会回调前一
+层的末段来平衡过短的章节尾层。默认每层间隔 60 秒并增加最多 15 秒随机等待。
+可用 `--delay`、`--jitter` 和 `--max-chars` 调整，但不建议为了速度显著缩短
+间隔。发布期间专用 Chrome 必须保持运行，但窗口可以最小化；发布完成后会自
+动关闭。每层提交后，脚本会确认章节标记在当前页面只出现一次，并比对渲染后
+的完整正文，核对通过才写入 `posted` 断点。若页面出现验证码或安全验证，脚本
+只会暂停并等待人工处理，不会尝试绕过。提交或核对过程中异常退出的层会保留
+为 `submitting`，再次运行前必须先人工核对主题与断点文件，以免重复发帖。

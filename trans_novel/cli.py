@@ -793,11 +793,11 @@ def tieba_publish(
         help="结束正文话数（含）",
     ),
     max_chars: int = typer.Option(
-        8000,
+        1950,
         "--max-chars",
         min=500,
-        max=9500,
-        help="单层最多字符数；超长章节优先按段落拆成多层",
+        max=2000,
+        help="单层最多字符数；贴吧当前上限 2000，默认预留 50 字",
     ),
     delay: float = typer.Option(
         60.0,
@@ -814,7 +814,7 @@ def tieba_publish(
     profile_dir: Optional[str] = typer.Option(
         None,
         "--profile-dir",
-        help="专用 Chrome 配置目录；默认存入 LOCALAPPDATA/Temp/.agents",
+        help="专用 Chrome 配置目录；默认存入项目 state/publish 并复用登录态",
     ),
     publish: bool = typer.Option(
         False,
