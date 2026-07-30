@@ -108,3 +108,37 @@ uv run trans-novel assemble book.epub
 ```
 
 `review` 会使用最终术语库检查完整译文；`--force` 可重审未变化章节，`--fix` 可采纳通过校验的严重项修复。`qa` 和 `report` 默认只汇总问题，不会修改正文；`assemble` 可在不重新调用模型的情况下重新导出已有译文。
+
+## 逐章发布到百度贴吧
+
+`tieba-publish` 从已有章节状态读取最终译文，默认跳过第 0 个作品信息页，按
+“标题 + 正文段落”生成回复。超过单层字符上限的章节会优先在段落边界拆分；
+每层都有稳定的章节标记，发布断点保存在对应书籍状态目录的 `publish/` 下。
+
+先预览，不会向贴吧发送内容：
+
+```powershell
+uv run trans-novel tieba-publish .\book.epub "https://tieba.baidu.com/p/主题ID"
+```
+
+建议先只发第一话。首次运行会打开一个专用 Chrome 窗口，需要在该窗口中登录
+一次百度账号；登录状态保存在
+`%LOCALAPPDATA%\Temp\.agents\wenyi-tieba-publisher\chrome-profile`，不会读取
+日常 Chrome 配置：
+
+```powershell
+uv run trans-novel tieba-publish .\book.epub "https://tieba.baidu.com/p/主题ID" `
+  --chapter 1 --publish
+```
+
+确认试发结果后，再发布剩余章节：
+
+```powershell
+uv run trans-novel tieba-publish .\book.epub "https://tieba.baidu.com/p/主题ID" `
+  --start 2 --publish
+```
+
+默认每层间隔 60 秒并增加最多 15 秒随机等待。可用 `--delay`、`--jitter` 和
+`--max-chars` 调整，但不建议为了速度显著缩短间隔。若页面出现验证码或安全
+验证，脚本只会暂停并等待人工处理，不会尝试绕过。提交过程中异常退出的层会
+保留为 `submitting`，再次运行前必须先人工核对主题与断点文件，以免重复发帖。

@@ -228,6 +228,7 @@ class TestCliConfig(unittest.TestCase):
             "report",
             "assemble",
             "status",
+            "tieba-publish",
             "glossary",
         ):
             self.assertIn(command, result.output)

@@ -770,6 +770,142 @@ def report(
     )
 
 
+@app.command("tieba-publish", rich_help_panel="状态与输出")
+def tieba_publish(
+    input: str = typer.Argument(..., help="已经建立翻译状态的源文件"),
+    thread_url: str = typer.Argument(..., help="目标贴吧主题链接"),
+    chapter: Optional[int] = typer.Option(
+        None,
+        "--chapter",
+        min=1,
+        help="只处理指定正文话数；默认处理整个范围",
+    ),
+    start: int = typer.Option(
+        1,
+        "--start",
+        min=1,
+        help="起始正文话数（含）；默认跳过第 0 个作品信息页",
+    ),
+    end: Optional[int] = typer.Option(
+        None,
+        "--end",
+        min=1,
+        help="结束正文话数（含）",
+    ),
+    max_chars: int = typer.Option(
+        8000,
+        "--max-chars",
+        min=500,
+        max=9500,
+        help="单层最多字符数；超长章节优先按段落拆成多层",
+    ),
+    delay: float = typer.Option(
+        60.0,
+        "--delay",
+        min=0,
+        help="相邻两层之间至少等待的秒数",
+    ),
+    jitter: float = typer.Option(
+        15.0,
+        "--jitter",
+        min=0,
+        help="在固定等待时间上增加的随机秒数上限",
+    ),
+    profile_dir: Optional[str] = typer.Option(
+        None,
+        "--profile-dir",
+        help="专用 Chrome 配置目录；默认存入 LOCALAPPDATA/Temp/.agents",
+    ),
+    publish: bool = typer.Option(
+        False,
+        "--publish",
+        help="实际发布；不加此开关只显示计划",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="实际发布时跳过命令行确认",
+    ),
+) -> None:
+    """把已完成译文按话回复到一个贴吧主题，支持限速和断点续发。"""
+    from .publish.tieba import (
+        PublishJournal,
+        TiebaPublishError,
+        build_publish_plan,
+        default_profile_dir,
+        journal_path_for,
+        publish_plan,
+        thread_id_from_url,
+    )
+
+    try:
+        thread_id_from_url(thread_url)
+        config = _load_config()
+        store = _runstore_for(config, input)
+        if not store.exists():
+            raise ValueError("尚无翻译状态；请先运行 translate")
+        first = chapter if chapter is not None else start
+        final = chapter if chapter is not None else end
+        plan = build_publish_plan(
+            store,
+            start=first,
+            end=final,
+            max_chars=max_chars,
+        )
+    except (IngestError, OSError, TiebaPublishError, ValueError) as error:
+        console.print(f"[red]错误：{error}[/]")
+        raise typer.Exit(1) from None
+
+    chapter_count = len({part.chapter for part in plan})
+    split_count = len(plan) - chapter_count
+    console.print(
+        f"发布计划：{chapter_count} 话、{len(plan)} 层、"
+        f"{sum(len(part.body) for part in plan):,} 字符"
+        f"{f'（{split_count} 个额外分层）' if split_count else ''}。"
+    )
+    preview = Table("话", "分层", "字符", "开头")
+    for part in plan[:10]:
+        preview.add_row(
+            str(part.chapter),
+            f"{part.part}/{part.part_count}",
+            str(len(part.body)),
+            part.body.splitlines()[0],
+        )
+    console.print(preview)
+    if len(plan) > 10:
+        console.print(f"……其余 {len(plan) - 10} 层已省略。")
+    if not publish:
+        console.print(
+            "[yellow]当前仅预览，没有向贴吧发送内容。[/]"
+            "确认范围后追加 [bold]--publish[/]；建议先用 --chapter 1 试发。"
+        )
+        return
+
+    if not yes and not typer.confirm(
+        f"将向贴吧主题 {thread_url} 实际发布 {len(plan)} 层，是否继续？"
+    ):
+        console.print("已取消，没有发送内容。")
+        return
+
+    try:
+        journal_path = journal_path_for(store, thread_url)
+        journal = PublishJournal(journal_path, thread_url=thread_url)
+        publish_plan(
+            plan,
+            thread_url=thread_url,
+            journal=journal,
+            profile_dir=profile_dir or default_profile_dir(),
+            delay_seconds=delay,
+            jitter_seconds=jitter,
+            progress=console.print,
+        )
+    except (OSError, TiebaPublishError, ValueError) as error:
+        console.print(f"[red]发布停止：{error}[/]")
+        raise typer.Exit(1) from None
+    console.print(f"[bold green]所选译文已发布完成。[/]断点：{journal_path}")
+
+
 app.add_typer(glossary_app, name="glossary", rich_help_panel="术语库")
 
 
