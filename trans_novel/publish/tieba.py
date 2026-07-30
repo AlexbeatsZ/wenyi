@@ -452,6 +452,17 @@ class TiebaBrowserPublisher:
             return False
         return editor.count() == 1
 
+    def _ensure_editor(self) -> None:
+        """回复框偶发未渲染时刷新主题重试，期间尚未提交所以不会重复发帖。"""
+        for attempt in range(3):
+            if self._open_editor():
+                return
+            if self.thread_url is None or attempt == 2:
+                break
+            self._goto_thread(self.thread_url)
+            self.page.wait_for_timeout(2_000)
+        raise TiebaPublishError("贴吧回复框刷新重试后仍不可用，登录可能已失效")
+
     def post(self, part: PublishPart) -> int:
         """提交一层，并用倒序刷新页确认服务器已持久保存；失败时仅重试一次。"""
         try:
@@ -482,8 +493,7 @@ class TiebaBrowserPublisher:
 
     def _post(self, part: PublishPart) -> None:
         """执行一次浏览器提交；Playwright 错误由 ``post`` 统一转换。"""
-        if not self._open_editor():
-            raise TiebaPublishError("贴吧回复框不可用，登录可能已失效")
+        self._ensure_editor()
         editor = self.page.locator(_EDITOR_SELECTOR)
         # Quill 会把传入的每个换行渲染为一个段落分隔；若直接传入双换行，
         # 读取时会扩成四个换行，并可能让实际字数越过贴吧上限。

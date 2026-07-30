@@ -12,6 +12,7 @@ from trans_novel.ingest.models import Chapter, Segment
 from trans_novel.publish.tieba import (
     PublishJournal,
     PublishRunLock,
+    TiebaBrowserPublisher,
     TiebaPublishError,
     build_chapter_parts,
     build_publish_plan,
@@ -241,6 +242,25 @@ class TestTiebaJournal(unittest.TestCase):
 
             self.assertTrue(Publisher.posted)
             self.assertEqual(journal.status(part), "posted")
+
+    def test_editor_render_failure_refreshes_before_giving_up(self):
+        publisher = object.__new__(TiebaBrowserPublisher)
+        outcomes = iter((False, True))
+        navigations = []
+
+        class Page:
+            @staticmethod
+            def wait_for_timeout(_):
+                pass
+
+        publisher.page = Page()
+        publisher.thread_url = "https://tieba.baidu.com/p/10905826072"
+        publisher._open_editor = lambda: next(outcomes)
+        publisher._goto_thread = navigations.append
+
+        publisher._ensure_editor()
+
+        self.assertEqual(navigations, [publisher.thread_url])
 
 
 if __name__ == "__main__":
