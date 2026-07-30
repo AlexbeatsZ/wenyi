@@ -6,14 +6,18 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from trans_novel.ingest.models import Chapter, Segment
 from trans_novel.publish.tieba import (
     PublishJournal,
+    PublishRunLock,
     TiebaPublishError,
     build_chapter_parts,
     build_publish_plan,
     chapter_paragraphs,
+    publish_plan,
+    rendered_body_matches,
     thread_id_from_url,
 )
 
@@ -93,6 +97,23 @@ class TestTiebaFormatting(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "第 2 章尚未完成"):
             build_publish_plan(Store(), start=1, end=2)
 
+    def test_rendered_body_accepts_equal_length_star_redaction(self):
+        self.assertEqual(
+            rendered_body_matches(
+                "尾关，你给我闭嘴！",
+                "尾关，****嘴！",
+            ),
+            (True, 4),
+        )
+        self.assertEqual(
+            rendered_body_matches("原始正文", "原始错文"),
+            (False, 0),
+        )
+        self.assertEqual(
+            rendered_body_matches("原始正文", "****"),
+            (True, 4),
+        )
+
 
 class TestTiebaJournal(unittest.TestCase):
     def test_journal_persists_and_rejects_changed_body(self):
@@ -117,7 +138,110 @@ class TestTiebaJournal(unittest.TestCase):
             with self.assertRaises(TiebaPublishError):
                 loaded.status(changed)
 
+    def test_publish_lock_rejects_second_process_for_same_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.json.lock"
+            with PublishRunLock(path), self.assertRaisesRegex(
+                TiebaPublishError,
+                "另一个贴吧发布进程",
+            ), PublishRunLock(path):
+                pass
+
+    def test_publish_plan_recovers_persisted_submitting_part(self):
+        part = build_chapter_parts(_chapter())[0]
+
+        class Publisher:
+            posted = False
+
+            def __init__(self, **_):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def open_thread(self, _):
+                pass
+
+            def inspect_post(self, _):
+                return 4
+
+            def post(self, _):
+                Publisher.posted = True
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = PublishJournal(
+                Path(directory) / "journal.json",
+                thread_url="https://tieba.baidu.com/p/10905826072",
+            )
+            journal.mark(part, "submitting")
+            with patch(
+                "trans_novel.publish.tieba.TiebaBrowserPublisher",
+                Publisher,
+            ):
+                publish_plan(
+                    [part],
+                    thread_url="https://tieba.baidu.com/p/10905826072",
+                    journal=journal,
+                    profile_dir=directory,
+                    delay_seconds=0,
+                    jitter_seconds=0,
+                )
+
+            self.assertFalse(Publisher.posted)
+            self.assertEqual(journal.status(part), "posted")
+            self.assertEqual(journal.data["items"][part.key]["redacted_chars"], 4)
+
+    def test_publish_plan_retries_missing_submitting_part(self):
+        part = build_chapter_parts(_chapter())[0]
+
+        class Publisher:
+            posted = False
+
+            def __init__(self, **_):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def open_thread(self, _):
+                pass
+
+            def inspect_post(self, _):
+                return None
+
+            def post(self, _):
+                Publisher.posted = True
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = PublishJournal(
+                Path(directory) / "journal.json",
+                thread_url="https://tieba.baidu.com/p/10905826072",
+            )
+            journal.mark(part, "submitting")
+            with patch(
+                "trans_novel.publish.tieba.TiebaBrowserPublisher",
+                Publisher,
+            ):
+                publish_plan(
+                    [part],
+                    thread_url="https://tieba.baidu.com/p/10905826072",
+                    journal=journal,
+                    profile_dir=directory,
+                    delay_seconds=0,
+                    jitter_seconds=0,
+                )
+
+            self.assertTrue(Publisher.posted)
+            self.assertEqual(journal.status(part), "posted")
+
 
 if __name__ == "__main__":
     unittest.main()
-

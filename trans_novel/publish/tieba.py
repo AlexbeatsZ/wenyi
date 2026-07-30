@@ -25,10 +25,61 @@ _THREAD_ID_RE = re.compile(r"^https?://tieba\.baidu\.com/p/(\d+)(?:[/?#].*)?$")
 _EDITOR_SELECTOR = '#tb-editor-pb-content .ql-editor[contenteditable="true"]'
 _PUBLISH_SELECTOR = ".publish-btn"
 _SECURITY_TEXTS = ("验证码", "安全验证", "操作过于频繁", "发布失败")
+_RETRY_DELAY_SECONDS = 30
 
 
 class TiebaPublishError(RuntimeError):
     """贴吧发布准备、提交或确认失败。"""
+
+
+class PublishRunLock:
+    """用操作系统文件锁阻止同一断点被多个发布进程同时使用。"""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self.handle: Any = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+b")
+        self.handle.seek(0, os.SEEK_END)
+        if self.handle.tell() == 0:
+            self.handle.write(b"\0")
+            self.handle.flush()
+        self.handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:  # pragma: no cover - Windows 是本项目当前运行环境
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            self.handle.close()
+            self.handle = None
+            raise TiebaPublishError(
+                "已有另一个贴吧发布进程正在使用同一断点；请勿重复启动"
+            ) from error
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self.handle is None:
+            return
+        try:
+            self.handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:  # pragma: no cover - Windows 是本项目当前运行环境
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +247,28 @@ def build_publish_plan(
     return plan
 
 
+def rendered_body_matches(expected: str, actual: str) -> tuple[bool, int]:
+    """比较贴吧渲染正文，并接受服务器做出的等长星号过滤。"""
+    normalized_expected = re.sub(r"\s+", "", expected)
+    normalized_actual = re.sub(r"\s+", "", actual)
+    if len(normalized_expected) != len(normalized_actual):
+        return False, 0
+    differences = [
+        index
+        for index, (expected_char, actual_char) in enumerate(
+            zip(normalized_expected, normalized_actual, strict=True)
+        )
+        if expected_char != actual_char
+    ]
+    if not differences:
+        return True, 0
+    redacted = all(
+        normalized_actual[index] == "*" and normalized_expected[index] != "*"
+        for index in differences
+    )
+    return redacted, len(differences) if redacted else 0
+
+
 class PublishJournal:
     """逐层原子记录提交前与提交后的状态。"""
 
@@ -278,6 +351,7 @@ class TiebaBrowserPublisher:
         self._browser_timeout: type[Exception] = TimeoutError
         self.context: Any = None
         self.page: Any = None
+        self.thread_url: str | None = None
 
     def __enter__(self):
         try:
@@ -319,6 +393,7 @@ class TiebaBrowserPublisher:
 
     def open_thread(self, thread_url: str) -> None:
         """打开目标主题；专用配置未登录时在可见窗口等待用户完成登录。"""
+        self.thread_url = thread_url
         try:
             self._goto_thread(thread_url)
             if self._open_editor():
@@ -377,11 +452,31 @@ class TiebaBrowserPublisher:
             return False
         return editor.count() == 1
 
-    def post(self, part: PublishPart) -> None:
-        """填写并提交一层，再从帖子楼层中核对标记和完整正文。"""
+    def post(self, part: PublishPart) -> int:
+        """提交一层，并用倒序刷新页确认服务器已持久保存；失败时仅重试一次。"""
         try:
-            self._post(part)
-            self._verify_post(part)
+            for attempt in range(2):
+                self._post(part)
+                self.page.wait_for_timeout(3_000)
+                redacted_chars = self.inspect_post(part)
+                if redacted_chars is not None:
+                    return redacted_chars
+                if attempt == 0:
+                    self.prompt(
+                        f"{part.marker} 刷新倒序页后仍未出现；"
+                        f"等待 {_RETRY_DELAY_SECONDS} 秒复核，确认缺失后只重试一次。"
+                    )
+                    self.page.wait_for_timeout(_RETRY_DELAY_SECONDS * 1_000)
+                    redacted_chars = self.inspect_post(part)
+                    if redacted_chars is not None:
+                        return redacted_chars
+                    if self.thread_url is None:
+                        raise TiebaPublishError("尚未打开目标主题")
+                    self._goto_thread(self.thread_url)
+            raise TiebaPublishError(
+                f"{part.marker} 两次提交后仍未在倒序页找到；"
+                "已保留为 submitting，请人工核对"
+            )
         except self._browser_error as error:
             raise TiebaPublishError(f"{part.marker} 浏览器操作失败：{error}") from error
 
@@ -434,32 +529,52 @@ class TiebaBrowserPublisher:
             "请先在主题中人工核对，避免重复发布"
         )
 
-    def _verify_post(self, part: PublishPart) -> None:
-        """确认新楼层唯一存在，且渲染后的正文没有缺失或串层。"""
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            floor = self.page.locator(".pb-text-wrapper").filter(
-                has_text=part.marker
-            )
-            count = floor.count()
-            if count > 1:
-                raise TiebaPublishError(
-                    f"{part.marker} 在当前页面出现 {count} 次，疑似重复发布"
-                )
-            if count == 1:
-                actual = re.sub(r"\s+", "", floor.inner_text())
-                expected = re.sub(r"\s+", "", part.body)
-                if actual != expected:
-                    raise TiebaPublishError(
-                        f"{part.marker} 已出现，但楼层正文与发布计划不一致"
-                    )
-                return
-            time.sleep(1)
-        raise TiebaPublishError(
-            f"{part.marker} 提交后未在帖子中找到；已保留为 submitting，"
-            "请先人工核对，避免重复发布"
-        )
+    def inspect_post(self, part: PublishPart) -> int | None:
+        """刷新并切到倒序，只以服务器重新加载出的最新楼层作为成功证据。"""
+        self._open_reverse_view()
 
+        floor = self.page.locator(".pb-text-wrapper").filter(has_text=part.marker)
+        count = floor.count()
+        if count > 1:
+            raise TiebaPublishError(
+                f"{part.marker} 在倒序页出现 {count} 次，疑似重复发布"
+            )
+        if count == 0:
+            return None
+        matches, redacted_chars = rendered_body_matches(
+            part.body,
+            floor.inner_text(),
+        )
+        if not matches:
+            raise TiebaPublishError(
+                f"{part.marker} 已持久保存，但正文存在非星号过滤差异"
+            )
+        return redacted_chars
+
+    def _open_reverse_view(self) -> None:
+        """刷新主题并切换到倒序，使最新持久楼层出现在虚拟列表顶部。"""
+        self.page.reload(wait_until="domcontentloaded")
+        reply_list = self.page.locator(".pc-pb-box")
+        try:
+            reply_list.wait_for(state="visible", timeout=15_000)
+        except self._browser_timeout:
+            raise TiebaPublishError("贴吧回复列表刷新后不可用") from None
+
+        reverse = self.page.locator(".sub-tab-item").filter(has_text="倒序")
+        if reverse.count() != 1:
+            raise TiebaPublishError("无法唯一定位贴吧倒序查看按钮")
+        classes = reverse.get_attribute("class") or ""
+        if "sub-tab-item-active" not in classes:
+            reverse.click()
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            classes = reverse.get_attribute("class") or ""
+            if "sub-tab-item-active" in classes:
+                break
+            time.sleep(0.5)
+        else:
+            raise TiebaPublishError("贴吧未能切换到倒序查看")
+        self.page.wait_for_timeout(2_000)
 
 def journal_path_for(store: RunStore, thread_url: str) -> Path:
     """返回本书与本主题组合对应的断点文件路径。"""
@@ -477,45 +592,79 @@ def publish_plan(
     prompt: Callable[[str], object] = print,
     progress: Callable[[str], None] = print,
 ) -> None:
-    """按计划顺序发布，已完成层自动跳过，模糊状态停止等待人工核对。"""
-    pending: list[PublishPart] = []
-    for part in plan:
-        status = journal.status(part)
-        if status == "posted":
-            continue
-        if status == "submitting":
-            raise TiebaPublishError(
-                f"{part.key} 上次在提交中中断。请先核对贴吧和断点文件，"
-                "确认后再决定是否重试"
-            )
-        pending.append(part)
-    if not pending:
-        progress("所选范围已经全部发布，无需重复操作。")
-        return
+    """单实例按顺序发布，并自动对账上次中断在 submitting 的最新层。"""
+    lock_path = journal.path.with_suffix(journal.path.suffix + ".lock")
+    with PublishRunLock(lock_path):
+        pending = [part for part in plan if journal.status(part) != "posted"]
+        if not pending:
+            progress("所选范围已经全部发布，无需重复操作。")
+            return
 
-    try:
-        with TiebaBrowserPublisher(profile_dir=profile_dir, prompt=prompt) as publisher:
-            publisher.open_thread(thread_url)
-            for position, part in enumerate(pending, 1):
-                progress(
-                    f"[{position}/{len(pending)}] 发布 {part.marker}，"
-                    f"{len(part.body)} 字"
-                )
-                journal.mark(part, "submitting")
-                try:
-                    publisher.post(part)
-                except (OSError, TiebaPublishError) as error:
-                    journal.mark(part, "submitting", error=str(error))
-                    raise
-                journal.mark(part, "posted")
-                progress(f"已核对 {part.marker}：楼层唯一且正文完整")
-                if position < len(pending):
-                    wait = max(0.0, delay_seconds) + random.uniform(
-                        0.0, max(0.0, jitter_seconds)
+        try:
+            with TiebaBrowserPublisher(
+                profile_dir=profile_dir,
+                prompt=prompt,
+            ) as publisher:
+                publisher.open_thread(thread_url)
+                for position, part in enumerate(pending, 1):
+                    status = journal.status(part)
+                    if status == "submitting":
+                        progress(f"自动对账上次中断层 {part.marker}…")
+                        redacted_chars = publisher.inspect_post(part)
+                        if redacted_chars is not None:
+                            journal.mark(
+                                part,
+                                "posted",
+                                redacted_chars=redacted_chars,
+                                recovered_from="submitting",
+                            )
+                            suffix = (
+                                f"，贴吧过滤 {redacted_chars} 字符"
+                                if redacted_chars
+                                else ""
+                            )
+                            progress(
+                                f"已恢复 {part.marker}：倒序页正文完整{suffix}"
+                            )
+                            continue
+                        journal.mark(
+                            part,
+                            "pending",
+                            error="倒序刷新页确认不存在，允许安全重试",
+                        )
+                        progress(f"{part.marker} 未持久保存，将安全重试")
+
+                    progress(
+                        f"[{position}/{len(pending)}] 发布 {part.marker}，"
+                        f"{len(part.body)} 字"
                     )
-                    progress(f"等待 {wait:.0f} 秒后发布下一层…")
-                    time.sleep(wait)
-    except TiebaPublishError:
-        raise
-    except (OSError, RuntimeError) as error:
-        raise TiebaPublishError(f"浏览器操作失败：{error}") from error
+                    journal.mark(part, "submitting")
+                    try:
+                        redacted_chars = publisher.post(part)
+                    except (OSError, TiebaPublishError) as error:
+                        journal.mark(part, "submitting", error=str(error))
+                        raise
+                    journal.mark(
+                        part,
+                        "posted",
+                        redacted_chars=redacted_chars,
+                    )
+                    suffix = (
+                        f"；贴吧过滤 {redacted_chars} 字符"
+                        if redacted_chars
+                        else ""
+                    )
+                    progress(
+                        f"已核对 {part.marker}："
+                        f"倒序刷新页楼层唯一且正文完整{suffix}"
+                    )
+                    if position < len(pending):
+                        wait = max(0.0, delay_seconds) + random.uniform(
+                            0.0, max(0.0, jitter_seconds)
+                        )
+                        progress(f"等待 {wait:.0f} 秒后发布下一层…")
+                        time.sleep(wait)
+        except TiebaPublishError:
+            raise
+        except (OSError, RuntimeError) as error:
+            raise TiebaPublishError(f"浏览器操作失败：{error}") from error
