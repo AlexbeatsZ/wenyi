@@ -563,28 +563,39 @@ class TiebaBrowserPublisher:
 
     def _open_reverse_view(self) -> None:
         """刷新主题并切换到倒序，使最新持久楼层出现在虚拟列表顶部。"""
-        self.page.reload(wait_until="domcontentloaded")
-        reply_list = self.page.locator(".pc-pb-box")
-        try:
-            reply_list.wait_for(state="visible", timeout=15_000)
-        except self._browser_timeout:
-            raise TiebaPublishError("贴吧回复列表刷新后不可用") from None
+        reason = "贴吧回复列表刷新后不可用"
+        for attempt in range(5):
+            if attempt == 0:
+                self.page.reload(wait_until="domcontentloaded")
+            elif self.thread_url is not None:
+                self._goto_thread(self.thread_url)
+            else:
+                self.page.reload(wait_until="domcontentloaded")
+            reply_list = self.page.locator(".pc-pb-box")
+            try:
+                reply_list.wait_for(state="visible", timeout=15_000)
+            except self._browser_timeout:
+                reason = "贴吧回复列表未渲染"
+                self.page.wait_for_timeout((attempt + 1) * 2_000)
+                continue
 
-        reverse = self.page.locator(".sub-tab-item").filter(has_text="倒序")
-        if reverse.count() != 1:
-            raise TiebaPublishError("无法唯一定位贴吧倒序查看按钮")
-        classes = reverse.get_attribute("class") or ""
-        if "sub-tab-item-active" not in classes:
-            reverse.click()
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
+            reverse = self.page.locator(".sub-tab-item").filter(has_text="倒序")
+            if reverse.count() != 1:
+                reason = f"倒序查看按钮数量为 {reverse.count()}"
+                self.page.wait_for_timeout((attempt + 1) * 2_000)
+                continue
             classes = reverse.get_attribute("class") or ""
-            if "sub-tab-item-active" in classes:
-                break
-            time.sleep(0.5)
-        else:
-            raise TiebaPublishError("贴吧未能切换到倒序查看")
-        self.page.wait_for_timeout(2_000)
+            if "sub-tab-item-active" not in classes:
+                reverse.click()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                classes = reverse.get_attribute("class") or ""
+                if "sub-tab-item-active" in classes:
+                    self.page.wait_for_timeout(2_000)
+                    return
+                time.sleep(0.5)
+            reason = "贴吧未能切换到倒序查看"
+        raise TiebaPublishError(f"{reason}；连续 5 次恢复失败")
 
 def journal_path_for(store: RunStore, thread_url: str) -> Path:
     """返回本书与本主题组合对应的断点文件路径。"""
