@@ -98,6 +98,19 @@ class TestConfigFileCreation(unittest.TestCase):
 
         self.assertEqual(cfg.llm.reasoning_style, "deepseek")
 
+    def test_cli_user_config_isolation_is_loaded(self):
+        cfg = Config.from_dict(
+            {
+                "llm": {
+                    "provider": "agy",
+                    "cwd": "runtime",
+                    "isolate_user_config": True,
+                }
+            }
+        )
+
+        self.assertTrue(cfg.llm.isolate_user_config)
+
     def test_translation_llm_is_loaded_independently(self):
         cfg = Config.from_dict(
             {

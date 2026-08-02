@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from trans_novel.config import Config
@@ -116,6 +119,21 @@ class TestAgyClient(unittest.TestCase):
     def test_rejects_missing_working_directory(self):
         with self.assertRaisesRegex(ValueError, "cwd 不是现有目录"):
             AgyClient(_config(cwd="definitely-missing-agy-directory").llm)
+
+    @patch("trans_novel.llm.providers.agy.subprocess.run")
+    def test_isolates_global_rules_and_user_config_when_enabled(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, "ok", "")
+        with tempfile.TemporaryDirectory() as directory:
+            client = AgyClient(
+                _config(cwd=directory, isolate_user_config=True).llm
+            )
+            client.complete([{"role": "user", "content": "x"}])
+
+            env = run.call_args.kwargs["env"]
+            self.assertEqual(env["HOME"], str(Path(directory) / "home"))
+            if os.name == "nt":
+                self.assertEqual(env["USERPROFILE"], env["HOME"])
+                self.assertTrue(env["LOCALAPPDATA"].endswith("local-app-data"))
 
     @patch("trans_novel.llm.providers.agy.subprocess.run")
     def test_uses_stable_short_model_id_first(self, run):

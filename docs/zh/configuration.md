@@ -107,6 +107,9 @@ review_llm:
         reasoning_effort: high
 ```
 
+该 adapter 会启动一次性的 `codex exec` 只读沙箱进程，忽略用户配置和自动发现的
+规则文件，通过 stdin 发送请求，并在提示中明确禁止工具与文件访问。
+
 PDF 输入的首次解析另外读取 `MINERU_API_KEY`，用于调用 MinerU
 转换服务。该密钥与 LLM provider 配置无关，也不写入 `config.yaml`。
 
@@ -261,8 +264,11 @@ JSON response mode。Wenyi 会把 system、user、assistant 内容标注角色�
 旧配置中的 `gemini-3.5-flash` ID 仍保持兼容，但新默认值和示例统一使用
 Gemini 3.6 Flash。
 
-可通过 `cwd` 指定 agy 可见的工作目录。plan 模式不是操作系统安全隔离边界；处理
-不可信提示词或需要严格隔离文件系统时，应另用操作系统沙箱或容器。
+可通过 `cwd` 指定 agy 可见的工作目录。业务提示词应设置
+`isolate_user_config: true`：Wenyi 会在该运行目录下为 agy 子进程提供独立的
+HOME（Windows 上同时隔离 USERPROFILE/LOCALAPPDATA），从而避免机器级开发规则
+进入翻译上下文；Windows 凭据管理器中的登录仍然可用。plan 模式不是操作系统
+安全隔离边界；处理不可信提示词或需要严格隔离文件系统时，应另用操作系统沙箱或容器。
 
 ## 流水线
 

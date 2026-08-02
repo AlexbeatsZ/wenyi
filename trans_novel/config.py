@@ -135,6 +135,7 @@ class LLMConfig(BaseModel):
     api_key_env: str | None = None
     command: str | None = None
     cwd: str | None = None
+    isolate_user_config: bool = False
     reasoning_style: ReasoningStyle = "none"
     timeout: int = 600
     max_retries: int = 4
@@ -266,6 +267,7 @@ def _parse_llm_config(raw: dict[str, Any]) -> LLMConfig:
         api_key_env=raw.get("api_key_env"),
         command=raw.get("command"),
         cwd=raw.get("cwd"),
+        isolate_user_config=bool(raw.get("isolate_user_config", False)),
         reasoning_style=raw.get("reasoning_style", "none"),
         timeout=raw.get("timeout", 600),
         max_retries=raw.get("max_retries", 4),

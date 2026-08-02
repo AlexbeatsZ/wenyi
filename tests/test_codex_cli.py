@@ -55,6 +55,8 @@ class TestCodexCLI(unittest.TestCase):
         args = run.call_args.args[0]
         self.assertEqual(args[:2], ["custom-codex", "exec"])
         self.assertIn("--ephemeral", args)
+        self.assertIn("--ignore-user-config", args)
+        self.assertIn("--ignore-rules", args)
         self.assertIn("read-only", args)
         self.assertIn("gpt-5.6-sol", args)
         self.assertEqual(args[-1], "-")

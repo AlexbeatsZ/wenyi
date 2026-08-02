@@ -12,6 +12,7 @@ llm:
 
   # 让 agy 在独立临时目录运行；该目录必须提前创建
   cwd: C:/Users/Meta/AppData/Local/Temp/.agents/wenyi-agy-runtime
+  isolate_user_config: true
 
   timeout: 600
 
@@ -32,6 +33,7 @@ translation_llm:
   provider: agy
   command: agy
   cwd: C:/Users/Meta/AppData/Local/Temp/.agents/wenyi-agy-runtime
+  isolate_user_config: true
   timeout: 600
   tiers:
     strong:

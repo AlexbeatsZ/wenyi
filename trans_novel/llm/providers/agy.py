@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import threading
@@ -135,6 +136,20 @@ class AgyClient(LLMClient):
         self.cwd = str(Path(cfg.cwd).expanduser()) if cfg.cwd else None
         if self.cwd and not Path(self.cwd).is_dir():
             raise ValueError(f"agy provider 的 cwd 不是现有目录：{self.cwd}")
+        self.env: dict[str, str] | None = None
+        if cfg.isolate_user_config:
+            if not self.cwd:
+                raise ValueError("agy provider 启用用户配置隔离时必须配置 cwd")
+            runtime_root = Path(self.cwd)
+            isolated_home = runtime_root / "home"
+            isolated_local_app_data = runtime_root / "local-app-data"
+            isolated_home.mkdir(parents=True, exist_ok=True)
+            isolated_local_app_data.mkdir(parents=True, exist_ok=True)
+            self.env = os.environ.copy()
+            self.env["HOME"] = str(isolated_home)
+            if os.name == "nt":
+                self.env["USERPROFILE"] = str(isolated_home)
+                self.env["LOCALAPPDATA"] = str(isolated_local_app_data)
         self.timeout = max(1, int(cfg.timeout))
         self.tiers = {**_DEFAULT_TIERS, **cfg.tiers}
         self._resolved_models: dict[str, str] = {}
@@ -202,6 +217,7 @@ class AgyClient(LLMClient):
                             result = subprocess.run(
                                 args,
                                 cwd=self.cwd,
+                                env=self.env,
                                 capture_output=True,
                                 text=True,
                                 encoding="utf-8",

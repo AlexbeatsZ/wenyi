@@ -117,7 +117,8 @@ review_llm:
 ```
 
 This adapter launches an ephemeral `codex exec` process in a read-only sandbox,
-sends the request through stdin, and explicitly forbids tools or file access.
+ignores both user configuration and discovered rule files, sends the request
+through stdin, and explicitly forbids tools or file access.
 It can serve final review and review fixes without replacing the primary
 translation/refinement models. Configure `polish_fallback_llm` separately when
 the same adapter should also handle a rare failed refinement leaf.
@@ -268,9 +269,14 @@ the brief model-registry race observed during agy 1.1 startup.
 The older `gemini-3.5-flash` IDs remain accepted for existing configurations,
 but new defaults and examples use Gemini 3.6 Flash.
 
-`cwd` may be set to choose the workspace visible to agy. Plan mode is not an
-operating-system security boundary; use an OS sandbox or container when
-untrusted prompts or stronger filesystem isolation are involved.
+`cwd` may be set to choose the workspace visible to agy. Set
+`isolate_user_config: true` for business prompts: Wenyi then gives the agy
+subprocess an independent HOME (and USERPROFILE/LOCALAPPDATA on Windows) under
+that runtime directory, preventing machine-global development rules from being
+injected into translation. Windows Credential Manager authentication remains
+available. Plan mode is not an operating-system security boundary; use an OS
+sandbox or container when untrusted prompts or stronger filesystem isolation
+are involved.
 
 ## Pipeline
 
