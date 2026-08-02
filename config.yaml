@@ -43,7 +43,20 @@ translation_llm:
     fast:
       model: Gemini 3.6 Flash (Medium)
 
-# 精修恢复专用：Gemini Pro 批级失败会先递归拆分；只有仍失败的单段才交给 Codex。
+# 内容策略回退：只接管 Gemini 明确拒绝的梗概或最小初译叶子。
+content_fallback_llm:
+  provider: codex-cli
+  command: codex
+  cwd: C:/Users/Meta/AppData/Local/Temp/.agents/wenyi-codex-review
+  timeout: 1200
+  tiers:
+    strong:
+      model: gpt-5.6-luna
+      options:
+        reasoning_effort: xhigh
+
+# 精修回退：Gemini Pro 批级失败会先递归拆分；只有仍失败的单段才交给 Terra。
+# 明确的内容策略拒绝和坏 JSON、漏项、CLI 暂态失败共用这条回退链。
 polish_fallback_llm:
   provider: codex-cli
   command: codex
@@ -51,7 +64,7 @@ polish_fallback_llm:
   timeout: 1200
   tiers:
     strong:
-      model: gpt-5.6-sol
+      model: gpt-5.6-terra
       options:
         reasoning_effort: high
 

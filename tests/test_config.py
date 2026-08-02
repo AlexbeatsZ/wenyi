@@ -168,7 +168,7 @@ class TestConfigFileCreation(unittest.TestCase):
                 "command": "codex",
                 "tiers": {
                     "strong": {
-                        "model": "gpt-5.6-sol",
+                        "model": "gpt-5.6-terra",
                         "options": {"reasoning_effort": "high"},
                     }
                 },
@@ -180,8 +180,33 @@ class TestConfigFileCreation(unittest.TestCase):
         self.assertEqual(cfg.polish_fallback_llm.provider, "codex-cli")
         self.assertEqual(
             cfg.polish_fallback_llm.tiers["strong"].model,
-            "gpt-5.6-sol",
+            "gpt-5.6-terra",
         )
+        self.assertEqual(
+            cfg.polish_fallback_llm.tiers["strong"].options["reasoning_effort"],
+            "high",
+        )
+
+    def test_content_fallback_llm_is_loaded_independently(self):
+        cfg = Config.from_dict({
+            "llm": {"provider": "agy"},
+            "content_fallback_llm": {
+                "provider": "codex-cli",
+                "command": "codex",
+                "tiers": {
+                    "strong": {
+                        "model": "gpt-5.6-luna",
+                        "options": {"reasoning_effort": "xhigh"},
+                    }
+                },
+            },
+        })
+
+        self.assertIsNotNone(cfg.content_fallback_llm)
+        assert cfg.content_fallback_llm is not None
+        tier = cfg.content_fallback_llm.tiers["strong"]
+        self.assertEqual(tier.model, "gpt-5.6-luna")
+        self.assertEqual(tier.options["reasoning_effort"], "xhigh")
 
 
 if __name__ == "__main__":

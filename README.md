@@ -47,6 +47,13 @@ model; `translation_llm` remains the first-draft client.
 Malformed structured responses are retried once with a stricter JSON reminder.
 If review or glossary arbitration still cannot parse the response, Wenyi
 recursively splits that chunk and preserves the original chapter/term order.
+Set `content_fallback_llm` to route only explicit content-policy rejections (or
+empty chapter-digest responses) to a separate model. Chapter summaries record
+the fallback reason, while initial translation narrows the rejection to the
+smallest source partition before switching models.
+Set `polish_fallback_llm` independently for polishing. After a failed polish
+batch is narrowed to one segment, this model handles both explicit content
+policy rejections and recovery from malformed or missing structured output.
 
 ## Supported formats and output
 

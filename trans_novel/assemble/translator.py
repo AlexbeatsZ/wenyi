@@ -12,7 +12,8 @@ from __future__ import annotations
 from ..agents import langprofile, prompts
 from ..agents.base import Agent
 from ..glossary.store import GlossaryTerm
-from ..llm.base import ContentPolicyError
+from ..config import Config
+from ..llm.base import ContentPolicyError, LLMClient
 
 
 class AlignmentError(Exception):
@@ -20,6 +21,16 @@ class AlignmentError(Exception):
 
 
 class Translator(Agent):
+    def __init__(
+        self,
+        client: LLMClient,
+        config: Config,
+        *,
+        content_fallback_client: LLMClient | None = None,
+    ) -> None:
+        super().__init__(client, config)
+        self.content_fallback_client = content_fallback_client
+
     def _call_batch(
         self,
         sources: list[str],
@@ -29,6 +40,8 @@ class Translator(Agent):
         book_synopsis: str = "",
         chapter_digest: str = "",
         narrative_facts: str = "",
+        client: LLMClient | None = None,
+        stage: str = "Translator",
     ) -> list[str]:
         """调用一次批量翻译，并严格校验输出类型、数量和非空性。"""
         n = len(sources)
@@ -50,7 +63,16 @@ class Translator(Agent):
             numbered_source=prompts.numbered(sources),
         )
         # 不传 default：调用失败照常抛出，由 translate_batch 的重试/兜底逻辑处理
-        items = self._ask_json(system, user, tier="strong", key="translations")
+        active_client = client or self.client
+        data = active_client.complete_json(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            tier="strong",
+            stage=stage,
+        )
+        items = data.get("translations") if isinstance(data, dict) else data
         if not isinstance(items, list):
             raise AlignmentError("模型未返回译文数组")
         if len(items) != n:
@@ -59,10 +81,32 @@ class Translator(Agent):
             raise AlignmentError("模型返回了空译文或非字符串译文")
         return items
 
+    def _call_content_fallback(
+        self,
+        sources: list[str],
+        glossary_terms: list[GlossaryTerm],
+        narrative_facts: str,
+    ) -> list[str]:
+        """用独立模型处理主模型明确拒绝的最小正文叶子。"""
+        if self.content_fallback_client is None:
+            raise ContentPolicyError("未配置 content_fallback_llm")
+        return self._call_batch(
+            sources,
+            glossary_terms,
+            "",
+            "",
+            "",
+            "",
+            narrative_facts,
+            client=self.content_fallback_client,
+            stage="TranslatorContentFallback",
+        )
+
     def _translate_one(self, source, glossary_terms, style, context,
                        book_synopsis, chapter_digest, narrative_facts="") -> str:
         """借用批量协议翻译单段，作为批量对齐失败后的最终兜底。"""
         self._last_call_used_policy_context_fallback = False
+        self._last_call_used_content_model_fallback = False
         try:
             out = self._call_batch(
                 [source], glossary_terms, style, context,
@@ -73,9 +117,15 @@ class Translator(Agent):
             # current sentence with spoiler-heavy whole-book/chapter context.
             # Retry only this segment with stable terminology; Pro polishing
             # still restores literary context after the initial translation.
-            out = self._call_batch(
-                [source], glossary_terms, "", "", "", "", narrative_facts,
-            )
+            try:
+                out = self._call_batch(
+                    [source], glossary_terms, "", "", "", "", narrative_facts,
+                )
+            except ContentPolicyError:
+                out = self._call_content_fallback(
+                    [source], glossary_terms, narrative_facts,
+                )
+                self._last_call_used_content_model_fallback = True
             self._last_call_used_policy_context_fallback = True
         return out[0]
 
@@ -93,9 +143,15 @@ class Translator(Agent):
     ) -> list[str]:
         """Bisect a policy-blocked batch and strip context only at the leaf."""
         if len(sources) == 1:
-            result = self._call_batch(
-                sources, glossary_terms, "", "", "", "", narrative_facts,
-            )
+            try:
+                result = self._call_batch(
+                    sources, glossary_terms, "", "", "", "", narrative_facts,
+                )
+            except ContentPolicyError:
+                result = self._call_content_fallback(
+                    sources, glossary_terms, narrative_facts,
+                )
+                self.last_content_model_fallback_indexes.append(offset)
             self.last_policy_context_fallback_indexes.append(offset)
             return result
 
@@ -218,7 +274,9 @@ class Translator(Agent):
         """翻译一批源段，返回与之等长的译文列表。"""
         glossary_terms = glossary_terms or []
         self.last_policy_context_fallback_indexes: list[int] = []
+        self.last_content_model_fallback_indexes: list[int] = []
         self._last_call_used_policy_context_fallback = False
+        self._last_call_used_content_model_fallback = False
         n = len(sources)
         if n == 0:
             return []
@@ -295,6 +353,8 @@ class Translator(Agent):
                 targets.append(translated)
                 if self._last_call_used_policy_context_fallback:
                     self.last_policy_context_fallback_indexes.append(index)
+                if self._last_call_used_content_model_fallback:
+                    self.last_content_model_fallback_indexes.append(index)
             except Exception as error:
                 raise AlignmentError(f"逐段兜底翻译在第 {index} 段失败") from error
         return targets

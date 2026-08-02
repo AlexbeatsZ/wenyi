@@ -27,9 +27,9 @@ class Polisher(Agent):
         recovery_fallback_client: LLMClient | None = None,
     ) -> None:
         super().__init__(client, config)
-        # 原有 fallback 只处理明确的内容策略拒绝，通常是初译 Flash。
+        # 内容策略拒绝只在递归缩小到单段后交给精修回退模型。
         self.fallback_client = fallback_client
-        # 独立恢复模型处理坏 JSON、漏项、CLI 暂态失败和策略备用也失败的叶子。
+        # 恢复模型也处理坏 JSON、漏项及 CLI 暂态失败的单段。
         self.recovery_fallback_client = recovery_fallback_client
         self.last_policy_fallback_indexes: list[int] = []
         self.last_policy_context_fallback_indexes: list[int] = []
@@ -151,7 +151,13 @@ class Polisher(Agent):
                     stage="PolisherPolicyFallback",
                 )
 
-        if self.recovery_fallback_client is not None:
+        if (
+            self.recovery_fallback_client is not None
+            and not (
+                policy_rejected
+                and self.recovery_fallback_client is self.fallback_client
+            )
+        ):
             try:
                 result = self._call(
                     self.recovery_fallback_client,

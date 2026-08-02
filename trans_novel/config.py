@@ -56,17 +56,29 @@ llm:
 #       options:
 #         reasoning_effort: high
 
-# 可选：主精修模型在坏 JSON、漏项或 CLI 异常后仍无法完成单段时，
-# 才把该失败叶子交给独立恢复模型。省略时保留初译并标记 refinement pending。
+# 可选：精修批次递归缩小到单段后，把内容策略拒绝、坏 JSON、漏项或
+# CLI 异常交给独立回退模型。省略时保留初译并标记 refinement pending。
 # polish_fallback_llm:
 #   provider: codex-cli
 #   command: codex
 #   timeout: 1200
 #   tiers:
 #     strong:
-#       model: gpt-5.6-sol
+#       model: gpt-5.6-terra
 #       options:
 #         reasoning_effort: high
+
+# 可选：主模型明确拒绝敏感内容、且移除未来上下文后仍无法处理时，
+# 把章节梗概或最小初译叶子交给独立内容回退模型。
+# content_fallback_llm:
+#   provider: codex-cli
+#   command: codex
+#   timeout: 1200
+#   tiers:
+#     strong:
+#       model: gpt-5.6-luna
+#       options:
+#         reasoning_effort: xhigh
 
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:
@@ -184,6 +196,7 @@ class Config(BaseModel):
     translation_llm: LLMConfig | None = None
     review_llm: LLMConfig | None = None
     polish_fallback_llm: LLMConfig | None = None
+    content_fallback_llm: LLMConfig | None = None
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
@@ -234,6 +247,12 @@ class Config(BaseModel):
             if isinstance(polish_fallback_raw, dict)
             else None
         )
+        content_fallback_raw = raw.get("content_fallback_llm")
+        content_fallback_llm = (
+            _parse_llm_config(content_fallback_raw)
+            if isinstance(content_fallback_raw, dict)
+            else None
+        )
         segment = SegmentConfig.model_validate(raw.get("segment", {}) or {})
         pipeline = PipelineConfig.model_validate(raw.get("pipeline", {}) or {})
         output = OutputConfig.model_validate(raw.get("output", {}) or {})
@@ -245,6 +264,7 @@ class Config(BaseModel):
             translation_llm=translation_llm,
             review_llm=review_llm,
             polish_fallback_llm=polish_fallback_llm,
+            content_fallback_llm=content_fallback_llm,
             segment=segment,
             pipeline=pipeline,
             output=output,

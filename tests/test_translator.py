@@ -110,6 +110,25 @@ class TestTranslatorAlignment(unittest.TestCase):
         self.assertIn("当前原文", fallback_user)
         self.assertEqual(len(client.calls), 2)
 
+    def test_source_policy_rejection_uses_content_fallback_model(self):
+        def rejected(messages, tier, json_mode):
+            raise ContentPolicyError("source rejected")
+
+        fallback = FakeClient(handler=lambda messages, tier, json_mode: json.dumps(
+            {"translations": ["Luna 完成的译文"]}, ensure_ascii=False
+        ))
+        translator = Translator(
+            FakeClient(handler=rejected),
+            self._config(),
+            content_fallback_client=fallback,
+        )
+
+        result = translator.translate_batch(["敏感原文"])
+
+        self.assertEqual(result, ["Luna 完成的译文"])
+        self.assertEqual(translator.last_content_model_fallback_indexes, [0])
+        self.assertEqual(fallback.calls[0]["stage"], "TranslatorContentFallback")
+
     def test_policy_rejection_is_bisected_instead_of_serializing_every_segment(self):
         sources = [f"普通段{i}" for i in range(16)]
         sources[5] = "策略触发段"

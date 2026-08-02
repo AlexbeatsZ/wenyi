@@ -111,6 +111,7 @@ class _BatchResult:
     targets: list[str]
     bt_samples: list[tuple[str, str]] = field(default_factory=list)
     policy_fallback_indexes: list[int] = field(default_factory=list)
+    content_model_fallback_indexes: list[int] = field(default_factory=list)
     polish_recovery_fallback_indexes: list[int] = field(default_factory=list)
     polish_failure_details: list[dict[str, object]] = field(default_factory=list)
     refinement_failed_indexes: list[int] = field(default_factory=list)
@@ -128,6 +129,7 @@ class Orchestrator:
         translation_client: LLMClient | None = None,
         review_client: LLMClient | None = None,
         polish_fallback_client: LLMClient | None = None,
+        content_fallback_client: LLMClient | None = None,
     ):
         """初始化共享 LLM 客户端、用量检查点和各流水线 Agent。"""
         self.config = config
@@ -147,17 +149,31 @@ class Orchestrator:
             if config.polish_fallback_llm is not None
             else None
         )
+        self.content_fallback_client = content_fallback_client or (
+            build_client_from_llm(config.content_fallback_llm)
+            if config.content_fallback_llm is not None
+            else None
+        )
         self._usage_clients = list({id(item): item for item in (
             self.client,
             self.translation_client,
             self.review_client,
             self.polish_fallback_client,
+            self.content_fallback_client,
         ) if item is not None}.values())
         # 各 client 的统计是进程内累计；checkpoint 用于每次落盘时只提取新增部分。
         self._usage_checkpoint = self._current_usage_summary()
         self.analyzer = Analyzer(self.client, config)
-        self.synopsizer = Synopsizer(self.client, config)
-        self.translator = Translator(self.translation_client, config)
+        self.synopsizer = Synopsizer(
+            self.client,
+            config,
+            content_fallback_client=self.content_fallback_client,
+        )
+        self.translator = Translator(
+            self.translation_client,
+            config,
+            content_fallback_client=self.content_fallback_client,
+        )
         # 审校与其自动修复共享 review_llm，确保同一模型对发现的问题负责到底。
         # 未配置独立 review_llm 时，review_client 本身就是主 llm，保持向后兼容。
         self.review_fixer = Translator(self.review_client, config)
@@ -168,9 +184,12 @@ class Orchestrator:
             self.client,
             config,
             fallback_client=(
-                self.translation_client
-                if self.translation_client is not self.client
-                else None
+                self.polish_fallback_client
+                or (
+                    self.translation_client
+                    if self.translation_client is not self.client
+                    else None
+                )
             ),
             recovery_fallback_client=self.polish_fallback_client,
         )
@@ -683,16 +702,21 @@ class Orchestrator:
             if progress:
                 progress(0, len(todo), "预扫章节梗概")
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                futs = {ex.submit(self.synopsizer.digest_chapter, src): ci
+                futs = {ex.submit(self.synopsizer.digest_chapter_result, src): ci
                         for ci, src in todo}
                 for n_done, fut in enumerate(as_completed(futs), 1):
                     ci = futs[fut]
-                    loaded[ci].meta["source_digest"] = fut.result()  # 失败时 _ask_text 已回退 ""
+                    result = fut.result()
+                    loaded[ci].meta["source_digest"] = result.text
                     store.save_chapter(loaded[ci])
                     store.log_event(
                         "book_understanding_chapter_digest_saved",
                         chapter=ci,
                         digest=loaded[ci].meta["source_digest"],
+                        content_fallback_used=result.fallback_used,
+                        primary_failure=result.primary_failure,
+                        fallback_failure=result.fallback_failure,
+                        terminal_failure=result.terminal_failure,
                     )
                     if progress:
                         progress(n_done, len(todo), "预扫章节梗概")
@@ -710,7 +734,19 @@ class Orchestrator:
                 digests, self.analyzer.style_brief(analysis))
             analysis["book_synopsis"] = synopsis
             store.save_analysis(analysis)
-            store.log_event("book_synopsis_saved", synopsis=synopsis)
+            store.log_event(
+                "book_synopsis_saved",
+                synopsis=synopsis,
+                content_fallback_count=(
+                    self.synopsizer.book_synopsis_fallback_count
+                ),
+                primary_failures=(
+                    self.synopsizer.book_synopsis_primary_failures
+                ),
+                fallback_failures=(
+                    self.synopsizer.book_synopsis_fallback_failures
+                ),
+            )
         return synopsis
 
     # ── 章节标题 / 目录项翻译（书名保持原文）──────────────────────────────
@@ -1184,6 +1220,9 @@ class Orchestrator:
                     else None
                 ),
                 policy_fallback_indexes=res.policy_fallback_indexes,
+                content_model_fallback_indexes=(
+                    res.content_model_fallback_indexes
+                ),
                 polish_recovery_fallback_indexes=(
                     res.polish_recovery_fallback_indexes
                 ),
@@ -1963,6 +2002,9 @@ class Orchestrator:
         policy_fallback_indexes = list(
             self.translator.last_policy_context_fallback_indexes
         )
+        content_model_fallback_indexes = list(
+            self.translator.last_content_model_fallback_indexes
+        )
         polish_recovery_fallback_indexes: list[int] = []
         polish_failure_details: list[dict[str, object]] = []
         refinement_failed_indexes: list[int] = []
@@ -2005,6 +2047,7 @@ class Orchestrator:
             targets=targets,
             bt_samples=bt_samples,
             policy_fallback_indexes=policy_fallback_indexes,
+            content_model_fallback_indexes=content_model_fallback_indexes,
             polish_recovery_fallback_indexes=polish_recovery_fallback_indexes,
             polish_failure_details=polish_failure_details,
             refinement_failed_indexes=refinement_failed_indexes,

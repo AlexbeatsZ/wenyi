@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from trans_novel.config import Config
 from trans_novel.glossary.store import GlossaryStore, GlossaryTerm
+from trans_novel.llm.base import ContentPolicyError
 from trans_novel.llm.providers.fake import FakeClient
 from trans_novel.pipeline.orchestrator import Orchestrator, _normalize_lang
 from trans_novel.pipeline.runstore import (
@@ -89,8 +90,38 @@ class TestOrchestrator(unittest.TestCase):
         )
 
         self.assertIs(orch.polisher.client, main)
-        self.assertIs(orch.polisher.fallback_client, initial)
+        self.assertIs(orch.polisher.fallback_client, recovery)
         self.assertIs(orch.polisher.recovery_fallback_client, recovery)
+
+    def test_content_fallback_routes_to_prescan_and_initial_translation(self):
+        cfg = _config("state")
+        main = FakeClient()
+        initial = FakeClient()
+        fallback = FakeClient()
+
+        orch = Orchestrator(
+            cfg,
+            client=main,
+            translation_client=initial,
+            content_fallback_client=fallback,
+        )
+
+        self.assertIs(orch.synopsizer.content_fallback_client, fallback)
+        self.assertIs(orch.translator.content_fallback_client, fallback)
+
+    def test_polish_fallback_handles_policy_and_recovery_paths(self):
+        cfg = _config("state")
+        main = FakeClient()
+        fallback = FakeClient()
+
+        orch = Orchestrator(
+            cfg,
+            client=main,
+            polish_fallback_client=fallback,
+        )
+
+        self.assertIs(orch.polisher.fallback_client, fallback)
+        self.assertIs(orch.polisher.recovery_fallback_client, fallback)
 
     def test_failed_polish_remains_pending_and_is_retried(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -527,6 +558,81 @@ class TestBookUnderstanding(unittest.TestCase):
                        if "梗概员" in c["messages"][0]["content"]
                        or "概览员" in c["messages"][0]["content"]]
             self.assertEqual(len(prepass), 0)
+
+    def test_prescan_policy_rejection_uses_fallback_and_is_not_repeated(self):
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+
+            def primary_handler(messages, tier, json_mode):
+                if "章节梗概员" in messages[0]["content"]:
+                    raise ContentPolicyError("policy rejected source")
+                return routing_handler(messages, tier, json_mode)
+
+            fallback = FakeClient(
+                handler=lambda messages, tier, json_mode: "Luna 生成的章节梗概"
+            )
+            store = Orchestrator(
+                cfg,
+                client=FakeClient(handler=primary_handler),
+                content_fallback_client=fallback,
+            ).run(txt)
+
+            for item in store.load_manifest()["chapters"]:
+                self.assertEqual(
+                    store.load_chapter(item["index"]).meta["source_digest"],
+                    "Luna 生成的章节梗概",
+                )
+            with open(store.event_log_path, encoding="utf-8") as event_file:
+                events = [json.loads(line) for line in event_file]
+            saved = [event for event in events if event.get("event") ==
+                     "book_understanding_chapter_digest_saved"]
+            self.assertTrue(saved)
+            self.assertTrue(all(event["content_fallback_used"] for event in saved))
+
+            primary2 = FakeClient(handler=primary_handler)
+            Orchestrator(
+                cfg,
+                client=primary2,
+                content_fallback_client=FakeClient(),
+            ).run(txt)
+            self.assertFalse(any(
+                "章节梗概员" in call["messages"][0]["content"]
+                for call in primary2.calls
+            ))
+
+    def test_book_synopsis_policy_rejection_uses_content_fallback(self):
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+
+            def primary_handler(messages, tier, json_mode):
+                if "全书概览员" in messages[0]["content"]:
+                    raise ContentPolicyError("policy rejected digest collection")
+                return routing_handler(messages, tier, json_mode)
+
+            fallback = FakeClient(
+                handler=lambda messages, tier, json_mode: "Luna 生成的全书概览"
+            )
+            store = Orchestrator(
+                cfg,
+                client=FakeClient(handler=primary_handler),
+                content_fallback_client=fallback,
+            ).run(txt)
+
+            self.assertEqual(
+                store.load_analysis()["book_synopsis"],
+                "Luna 生成的全书概览",
+            )
+            self.assertEqual(fallback.calls[0]["stage"],
+                             "BookSynopsizerContentFallback")
+            with open(store.event_log_path, encoding="utf-8") as event_file:
+                events = [json.loads(line) for line in event_file]
+            saved = [event for event in events if event.get("event") ==
+                     "book_synopsis_saved"]
+            self.assertEqual(saved[-1]["content_fallback_count"], 1)
 
     def test_toggle_off(self):
         """关闭 book_understanding：不预扫，prompt 用「（无）」占位。"""
