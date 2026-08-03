@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tests.fake_llm import routing_handler
+from tests.sample_data import write_sample_txt
 from trans_novel.config import Config
 from trans_novel.glossary.store import GlossaryStore, GlossaryTerm
 from trans_novel.llm.base import ContentPolicyError
@@ -21,8 +23,6 @@ from trans_novel.pipeline.runstore import (
     STATUS_DONE,
     STATUS_PENDING,
 )
-from tests.sample_data import write_sample_txt
-from tests.fake_llm import routing_handler
 
 
 def _translated_para_count(calls) -> int:
@@ -684,6 +684,8 @@ class TestReviewReporting(unittest.TestCase):
             sys = messages[0]["content"]
             user = messages[-1]["content"]
             if "译文审校" in sys:
+                if fix_text in user:
+                    return json.dumps({"issues": []}, ensure_ascii=False)
                 return json.dumps({"issues": [
                     {"index": 0, "type": issue_type, "detail": "审校问题", "suggestion": "修正"}
                 ]}, ensure_ascii=False)
@@ -745,6 +747,42 @@ class TestReviewReporting(unittest.TestCase):
             finally:
                 glossary.close()
 
+    def test_stage_artifacts_keep_initial_refinement_and_review_versions(self):
+        """初译、精修、shadow 候选和正式采纳均为追加式可比较产物。"""
+        with tempfile.TemporaryDirectory() as d:
+            store = self._run(d, autofix=True)
+            artifact_path = store.translation_artifact_path(0)
+            with open(artifact_path, encoding="utf-8") as file:
+                records = [json.loads(line) for line in file]
+
+            stages = [record["stage"] for record in records]
+            self.assertIn("initial_translation", stages)
+            self.assertIn("refinement", stages)
+            self.assertIn("review_shadow", stages)
+            self.assertIn("review_applied", stages)
+
+            initial = next(
+                record for record in records
+                if record["stage"] == "initial_translation"
+            )
+            refinement = next(
+                record for record in records
+                if record["stage"] == "refinement"
+            )
+            self.assertTrue(initial["segments"][0]["source"])
+            self.assertIn("target", initial["segments"][0])
+            self.assertIn("previous_target", refinement["segments"][0])
+            input_path = os.path.join(
+                store.run_dir,
+                *initial["input_ref"]["path"].split("/"),
+            )
+            self.assertTrue(os.path.isfile(input_path))
+            with open(input_path, encoding="utf-8") as file:
+                prompt_inputs = json.load(file)
+            self.assertIn("glossary", prompt_inputs)
+            self.assertIn("narrative_facts", prompt_inputs)
+            self.assertIn("context", prompt_inputs)
+
     def test_autofix_adopts_added_retranslation(self):
         """增译/混入同样由审校模型定向修复，不能只报告后进入成品。"""
         with tempfile.TemporaryDirectory() as d:
@@ -767,6 +805,8 @@ class TestReviewReporting(unittest.TestCase):
                 system = messages[0]["content"]
                 user = messages[-1]["content"]
                 if "译文审校" in system:
+                    if self.FIX_TEXT in user:
+                        return json.dumps({"issues": []}, ensure_ascii=False)
                     return json.dumps({"issues": [{
                         "index": 0,
                         "type": "missing",
@@ -804,6 +844,91 @@ class TestReviewReporting(unittest.TestCase):
                 "【审校意见】" in call["messages"][-1]["content"]
                 for call in deepseek.calls
             ))
+
+    def test_autofix_keeps_formal_translation_when_shadow_review_still_fails(self):
+        """候选修复只存在于 shadow 文本；盲审仍报错时不能写回正式译文。"""
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.autofix_severe = True
+
+            original_target: list[str] = []
+
+            def handler(messages, tier, json_mode):
+                system = messages[0]["content"]
+                user = messages[-1]["content"]
+                if "文学翻译" in system and "【审校意见】" in user:
+                    return json.dumps(
+                        {"translations": [self.FIX_TEXT]}, ensure_ascii=False
+                    )
+                if "译文审校" in system:
+                    return json.dumps({"issues": [{
+                        "index": 0,
+                        "type": "mistranslation",
+                        "detail": "候选仍改变原意",
+                        "suggestion": "继续修改",
+                    }]}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            orch = Orchestrator(cfg, client=FakeClient(handler=handler))
+            initial_store = orch.run(txt)
+            original_target.append(
+                initial_store.load_chapter(0).text_segments[0].target or ""
+            )
+            store = orch.run_review(txt, autofix=True)["store"]
+            chapter = store.load_chapter(0)
+
+            self.assertEqual(chapter.text_segments[0].target, original_target[0])
+            issue = chapter.meta["review_issues"][0]
+            self.assertFalse(issue["fixed"])
+            self.assertEqual(issue["fix_validation"]["status"], "rejected")
+            self.assertEqual(
+                issue["fix_validation"]["reason"], "shadow_review_failed"
+            )
+
+    def test_autofix_generation_failure_is_archived_without_failing_review(self):
+        """修复模型异常要留下错误与空 shadow 候选，不能丢失整章审校结果。"""
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.autofix_severe = True
+
+            def handler(messages, tier, json_mode):
+                system = messages[0]["content"]
+                user = messages[-1]["content"]
+                if "文学翻译" in system and "【审校意见】" in user:
+                    raise RuntimeError("fix quota exhausted")
+                if "译文审校" in system:
+                    return json.dumps({"issues": [{
+                        "index": 0,
+                        "type": "missing",
+                        "detail": "漏译",
+                        "suggestion": "补全",
+                    }]}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            orch = Orchestrator(cfg, client=FakeClient(handler=handler))
+            orch.run(txt)
+            store = orch.run_review(txt, autofix=True)["store"]
+            issue = store.load_chapter(0).meta["review_issues"][0]
+
+            self.assertFalse(issue["fixed"])
+            self.assertEqual(
+                issue["fix_validation"]["reason"], "fix_generation_failed"
+            )
+            self.assertIn(
+                "fix quota exhausted",
+                issue["fix_validation"]["generation_error"],
+            )
+            with open(store.translation_artifact_path(0), encoding="utf-8") as file:
+                records = [json.loads(line) for line in file]
+            shadow = next(
+                record for record in records
+                if record["stage"] == "review_shadow"
+            )
+            self.assertEqual(shadow["metadata"]["reason"], "fix_generation_failed")
 
     def test_review_auto_resolves_glossary_conflicts_with_main_client(self):
         """审校前由主 llm 结合上下文裁定术语，随后审校 prompt 使用最终译名。"""

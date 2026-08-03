@@ -23,36 +23,40 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from ..agents.analyzer import Analyzer
+from ..agents.polisher import Polisher
+from ..agents.reviewer import BackTranslator, GlossaryArbiter, Reviewer
+from ..agents.synopsis import Synopsizer
+from ..agents.translator import Translator
 from ..config import Config
-from ..glossary.extractor import GlossaryExtractor
 from ..glossary import resolver as glossary_resolver
+from ..glossary.extractor import GlossaryExtractor
 from ..glossary.store import GlossaryStore
+from ..ingest.segmenter import batch_segments, load_document
 from ..llm.base import LLMClient
 from ..llm.factory import build_client, build_client_from_llm
 from ..llm.json_parser import JSONParseError
 from ..llm.usage import merge_usage_summaries, usage_delta
 from ..narrative import NarrativeKnowledge, NarrativePosition
-from ..ingest.segmenter import load_document, batch_segments
 from ..postprocess.punct import (
     normalize_zh,
     normalize_zh_segments,
     restore_zh_dialogue_quotes,
 )
-from ..agents.analyzer import Analyzer
-from ..agents.synopsis import Synopsizer
-from ..agents.translator import Translator
-from ..agents.reviewer import Reviewer, BackTranslator, GlossaryArbiter
-from ..agents.polisher import Polisher
 from . import checks
 from .context import RollingContext
+from .review_validation import (
+    ReviewIssueValidator,
+    ReviewValidationOutcome,
+)
 from .runstore import (
     REVIEW_DONE,
     REVIEW_FAILED,
     REVIEW_PENDING,
     REVIEW_RUNNING,
-    RunStore,
     STATUS_DONE,
     STATUS_PENDING,
+    RunStore,
     slugify,
 )
 
@@ -109,6 +113,8 @@ def _resume_batches(segments, max_chars: int) -> list[list]:
 @dataclass
 class _BatchResult:
     targets: list[str]
+    initial_targets: list[str] = field(default_factory=list)
+    refinement_targets: list[str] | None = None
     bt_samples: list[tuple[str, str]] = field(default_factory=list)
     policy_fallback_indexes: list[int] = field(default_factory=list)
     content_model_fallback_indexes: list[int] = field(default_factory=list)
@@ -178,6 +184,7 @@ class Orchestrator:
         # 未配置独立 review_llm 时，review_client 本身就是主 llm，保持向后兼容。
         self.review_fixer = Translator(self.review_client, config)
         self.reviewer = Reviewer(self.review_client, config)
+        self.review_issue_validator = ReviewIssueValidator()
         self.glossary_arbiter = GlossaryArbiter(self.client, config)
         self.backtrans = BackTranslator(self.client, config)
         self.polisher = Polisher(
@@ -1067,14 +1074,30 @@ class Orchestrator:
                     safe_synopsis, safe_digest = self._prompt_plot_context(
                         book_synopsis, chapter_digest
                     )
+                    before_repolish = list(existing_targets)
+                    repolish_context = context.render(
+                        self.config.pipeline.rolling_context_segments
+                    )
+                    repolish_input_ref = self._archive_translation_input(
+                        store,
+                        stage="refinement_retry",
+                        chapter=ci,
+                        start_index=batch_start,
+                        sources=[segment.source for segment in b],
+                        current_targets=before_repolish,
+                        terms=view.terms,
+                        style=style,
+                        context=repolish_context,
+                        book_synopsis=safe_synopsis,
+                        chapter_digest=safe_digest,
+                        narrative_facts=view.render_facts(),
+                    )
                     polished = self.polisher.polish(
                         existing_targets,
                         sources=[segment.source for segment in b],
                         glossary_terms=view.terms,
                         style=style,
-                        context=context.render(
-                            self.config.pipeline.rolling_context_segments
-                        ),
+                        context=repolish_context,
                         book_synopsis=safe_synopsis,
                         chapter_digest=safe_digest,
                         narrative_facts=view.render_facts(),
@@ -1094,6 +1117,30 @@ class Orchestrator:
                         refinement_pending
                     )
                     store.save_chapter(chapter)
+                    repolish_artifact = store.record_translation_stage(
+                        "refinement_retry",
+                        chapter=ci,
+                        start_index=batch_start,
+                        sources=[segment.source for segment in b],
+                        previous_targets=before_repolish,
+                        targets=list(polished),
+                        input_ref=repolish_input_ref,
+                        metadata={
+                            "provider": self.config.llm.provider,
+                            "model": (
+                                self.config.llm.tiers.get("strong").model
+                                if self.config.llm.tiers.get("strong") is not None
+                                else None
+                            ),
+                            "failed_indexes": list(self.polisher.last_failed_indexes),
+                            "recovery_fallback_indexes": list(
+                                self.polisher.last_recovery_fallback_indexes
+                            ),
+                            "failure_details": list(
+                                self.polisher.last_failure_details
+                            ),
+                        },
+                    )
                     store.log_event(
                         "batch_repolished",
                         chapter=ci,
@@ -1116,6 +1163,7 @@ class Orchestrator:
                             }
                             for detail in self.polisher.last_failure_details
                         ],
+                        artifact_ref=repolish_artifact,
                     )
                 # 该批上次已在原位译完；必要的精修重试后重建滚动上下文。
                 context.add_targets(existing_targets)
@@ -1159,17 +1207,115 @@ class Orchestrator:
             safe_synopsis, safe_digest = self._prompt_plot_context(
                 book_synopsis, chapter_digest
             )
-            res = self._process_batch(
-                b,
-                view.terms,
-                ctx_text,
-                style,
-                safe_synopsis,
-                safe_digest,
-                view.render_facts(),
+            sources = [segment.source for segment in b]
+            input_ref = self._archive_translation_input(
+                store,
+                stage="translation_batch",
+                chapter=ci,
+                start_index=batch_start,
+                sources=sources,
+                current_targets=None,
+                terms=view.terms,
+                style=style,
+                context=ctx_text,
+                book_synopsis=safe_synopsis,
+                chapter_digest=safe_digest,
+                narrative_facts=view.render_facts(),
             )
+            try:
+                res = self._process_batch(
+                    b,
+                    view.terms,
+                    ctx_text,
+                    style,
+                    safe_synopsis,
+                    safe_digest,
+                    view.render_facts(),
+                )
+            except Exception as error:
+                store.log_event(
+                    "batch_translation_failed",
+                    chapter=ci,
+                    start_index=batch_start,
+                    count=len(b),
+                    input_ref=input_ref,
+                    error_type=type(error).__name__,
+                    error=str(error),
+                    raw_response=getattr(error, "raw_text", "") or None,
+                )
+                raise
             for s, t in zip(b, res.targets):
                 s.target = t
+            initial_artifact = store.record_translation_stage(
+                "initial_translation",
+                chapter=ci,
+                start_index=batch_start,
+                sources=sources,
+                targets=res.initial_targets,
+                input_ref=input_ref,
+                metadata={
+                    "provider": (
+                        self.config.translation_llm.provider
+                        if self.config.translation_llm is not None
+                        else self.config.llm.provider
+                    ),
+                    "model": (
+                        (
+                            self.config.translation_llm.tiers.get("strong").model
+                            if self.config.translation_llm is not None
+                            and self.config.translation_llm.tiers.get("strong") is not None
+                            else None
+                        )
+                        or (
+                            self.config.llm.tiers.get("strong").model
+                            if self.config.llm.tiers.get("strong") is not None
+                            else None
+                        )
+                    ),
+                    "policy_fallback_indexes": res.policy_fallback_indexes,
+                    "content_model_fallback_indexes": (
+                        res.content_model_fallback_indexes
+                    ),
+                },
+            )
+            refinement_artifact = None
+            if res.refinement_targets is not None:
+                refinement_input_ref = self._archive_translation_input(
+                    store,
+                    stage="refinement",
+                    chapter=ci,
+                    start_index=batch_start,
+                    sources=sources,
+                    current_targets=res.initial_targets,
+                    terms=view.terms,
+                    style=style,
+                    context=ctx_text,
+                    book_synopsis=safe_synopsis,
+                    chapter_digest=safe_digest,
+                    narrative_facts=view.render_facts(),
+                )
+                refinement_artifact = store.record_translation_stage(
+                    "refinement",
+                    chapter=ci,
+                    start_index=batch_start,
+                    sources=sources,
+                    previous_targets=res.initial_targets,
+                    targets=res.refinement_targets,
+                    input_ref=refinement_input_ref,
+                    metadata={
+                        "provider": self.config.llm.provider,
+                        "model": (
+                            self.config.llm.tiers.get("strong").model
+                            if self.config.llm.tiers.get("strong") is not None
+                            else None
+                        ),
+                        "failed_indexes": res.refinement_failed_indexes,
+                        "recovery_fallback_indexes": (
+                            res.polish_recovery_fallback_indexes
+                        ),
+                        "failure_details": res.polish_failure_details,
+                    },
+                )
             refinement_pending.difference_update(
                 range(batch_start, batch_start + len(b))
             )
@@ -1229,6 +1375,11 @@ class Orchestrator:
                 polish_failure_details=res.polish_failure_details,
                 punctuation_normalized=self._punctuation_enabled(),
                 backtranslate_sample_count=len(res.bt_samples),
+                artifact_refs=[
+                    reference
+                    for reference in (initial_artifact, refinement_artifact)
+                    if reference is not None
+                ],
                 segments=[
                     {"index": batch_start + i, "source": s.source, "target": t}
                     for i, (s, t) in enumerate(zip(b, res.targets))
@@ -1264,6 +1415,27 @@ class Orchestrator:
             )
             for segment, normalized in zip(text_segs, normalized_targets):
                 segment.target = normalized
+            if normalized_targets != translated:
+                punctuation_artifact = store.record_translation_stage(
+                    "punctuation_normalization",
+                    chapter=ci,
+                    start_index=0,
+                    sources=[segment.source for segment in text_segs],
+                    previous_targets=translated,
+                    targets=normalized_targets,
+                    metadata={
+                        "quote_style": self.config.punctuation_quote_style,
+                    },
+                )
+                store.log_event(
+                    "chapter_punctuation_normalized",
+                    chapter=ci,
+                    changed=sum(
+                        before != after
+                        for before, after in zip(translated, normalized_targets)
+                    ),
+                    artifact_ref=punctuation_artifact,
+                )
             # 当前章译文已在逐批处理中加入滚动上下文；同步替换其保留在尾部的
             # 部分，确保下一章看到的是最终规范化版本。
             retained = min(len(normalized_targets), len(context.recent_targets))
@@ -1333,6 +1505,53 @@ class Orchestrator:
         hit = {t.source for t in GlossaryStore.terms_in(terms, src_text)}
         return [t for t in terms if t.source in hit]
 
+    def _archive_translation_input(
+        self,
+        store: RunStore,
+        *,
+        stage: str,
+        chapter: int,
+        start_index: int,
+        sources: list[str],
+        current_targets: list[str] | None,
+        terms,
+        style: str,
+        context: str,
+        book_synopsis: str,
+        chapter_digest: str,
+        narrative_facts: str,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """保存可重建某次翻译提示输入的内容寻址快照。"""
+        return store.save_translation_input({
+            "schema_version": 1,
+            "stage": stage,
+            "source_lang": self.config.source_lang,
+            "target_lang": self.config.target_lang,
+            "chapter": chapter,
+            "start_index": start_index,
+            "sources": sources,
+            "current_targets": current_targets,
+            "style": style,
+            "context": context,
+            "book_synopsis": book_synopsis,
+            "chapter_digest": chapter_digest,
+            "narrative_facts": narrative_facts,
+            "glossary": [
+                {
+                    "source": term.source,
+                    "target": term.target,
+                    "reading": term.reading,
+                    "type": term.type,
+                    "gender": term.gender,
+                    "aliases": term.aliases,
+                    "status": term.status,
+                }
+                for term in terms
+            ],
+            "extra": extra or {},
+        })
+
     @staticmethod
     def _chapter_progress_label(title: str, index: int) -> str:
         """进度展示用章节名：优先用书内标题，避免内部序号与“第一章”等标题冲突。"""
@@ -1356,7 +1575,7 @@ class Orchestrator:
 
     # ── 全书最终审校 + 严重项定向重译 ────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation", "added")
-    _REVIEW_SCHEMA_VERSION = 6
+    _REVIEW_SCHEMA_VERSION = 7
     _GLOSSARY_ARBITER_BATCH_CHARS = 4500
     _GLOSSARY_DECISION_ATTEMPTS = 2
 
@@ -1575,6 +1794,7 @@ class Orchestrator:
             "source_lang": self.config.source_lang,
             "target_lang": self.config.target_lang,
             "autofix": autofix,
+            "verify_review_fixes": self.config.pipeline.verify_review_fixes,
             "segments": [
                 {"source": segment.source, "target": segment.target or ""}
                 for segment in text_segs
@@ -1706,12 +1926,13 @@ class Orchestrator:
             if progress:
                 progress(done, total, label)
             try:
-                new_issues = self._review_chapter(
+                review_outcome = self._review_chapter(
                     text_segs,
                     term_snapshot,
                     knowledge=knowledge,
                     chapter_index=ci,
                 )
+                new_issues = review_outcome.issues
                 for issue in new_issues:
                     issue["chapter"] = ci
                     issue.setdefault("fixed", False)
@@ -1735,6 +1956,7 @@ class Orchestrator:
                             glossary.add_tm(segment.source, segment.target, ci)
 
                 chapter.meta["review_issues"] = new_issues
+                chapter.meta["review_dismissed"] = review_outcome.dismissed
                 chapter.meta["review_digest"] = self._review_digest(
                     text_segs,
                     term_snapshot,
@@ -1750,6 +1972,7 @@ class Orchestrator:
                     chapter=ci,
                     error_type=type(error).__name__,
                     error=str(error),
+                    raw_response=getattr(error, "raw_text", "") or None,
                 )
                 raise
 
@@ -1759,7 +1982,9 @@ class Orchestrator:
                 "chapter_reviewed",
                 chapter=ci,
                 issue_count=len(new_issues),
+                dismissed_count=len(review_outcome.dismissed),
                 issues=new_issues,
+                dismissed=review_outcome.dismissed,
                 autofix=do_autofix,
             )
             if progress:
@@ -1779,8 +2004,8 @@ class Orchestrator:
         *,
         knowledge: NarrativeKnowledge | None = None,
         chapter_index: int = 0,
-    ) -> list[dict]:
-        """把一章切成连续块并行审校，返回映射到章内段号的问题。
+    ) -> ReviewValidationOutcome:
+        """把一章切成连续块并行审校并验证候选问题。
 
         块 = 连续段序列（约 3 倍翻译批大小，减少调用次数与重复注入的输入 token）；
         块内 reviewer 返回的 index 是块内下标，加块首段偏移映射回章内段号；
@@ -1812,7 +2037,7 @@ class Orchestrator:
                 chunk_base += len(chunk)
             chunks = split_chunks
         if not chunks:
-            return []
+            return ReviewValidationOutcome()
 
         jobs: list[tuple[int, list, list, str]] = []
         base = 0
@@ -1830,7 +2055,9 @@ class Orchestrator:
             jobs.append((base, chunk, chunk_terms, narrative_facts))
             base += len(chunk)
 
-        def review_one(job: tuple[int, list, list, str]) -> list[dict]:
+        def review_one(
+            job: tuple[int, list, list, str]
+        ) -> ReviewValidationOutcome:
             """审校一个连续块，并把块内问题索引映射为章内索引。"""
             chunk_base, chunk, chunk_terms, narrative_facts = job
             srcs = [s.source for s in chunk]
@@ -1847,15 +2074,17 @@ class Orchestrator:
                 if len(chunk) <= 1:
                     raise
                 midpoint = len(chunk) // 2
-                return (
-                    review_one((chunk_base, chunk[:midpoint], chunk_terms, narrative_facts))
-                    + review_one((
+                left = review_one(
+                    (chunk_base, chunk[:midpoint], chunk_terms, narrative_facts)
+                )
+                right = review_one((
                         chunk_base + midpoint,
                         chunk[midpoint:],
                         chunk_terms,
                         narrative_facts,
                     ))
-                )
+                left.extend(right)
+                return left
             chunk_issues: list[dict] = []
             for it in raw_issues:
                 idx = it.get("index")
@@ -1865,7 +2094,7 @@ class Orchestrator:
                     except ValueError:
                         idx = None
                 if isinstance(idx, int) and 0 <= idx < len(chunk):
-                    it["index"] = chunk_base + idx
+                    it["index"] = idx
                     chunk_issues.append(it)
                 else:
                     warnings.warn(
@@ -1874,7 +2103,15 @@ class Orchestrator:
                         RuntimeWarning,
                         stacklevel=2,
                     )
-            return chunk_issues
+            validated = self.review_issue_validator.validate(
+                chunk_issues,
+                srcs,
+                tgts,
+                chunk_terms,
+            )
+            for item in [*validated.issues, *validated.dismissed]:
+                item["index"] = chunk_base + item["index"]
+            return validated
 
         workers = min(
             max(1, self.config.pipeline.review_concurrency),
@@ -1886,7 +2123,10 @@ class Orchestrator:
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 # executor.map 保持输入顺序；并发完成顺序不会改变 issue 顺序。
                 results = list(ex.map(review_one, jobs))
-        return [issue for chunk_issues in results for issue in chunk_issues]
+        outcome = ReviewValidationOutcome()
+        for result in results:
+            outcome.extend(result)
+        return outcome
 
     @staticmethod
     def _pack_contiguous(segs, budget: int) -> list[list]:
@@ -1909,10 +2149,11 @@ class Orchestrator:
                         knowledge: NarrativeKnowledge | None = None,
                         store: RunStore | None = None,
                         chapter_index: int | None = None) -> None:
-        """对审校严重项（漏译/误译/增译）带审校意见定向重译，每段最多一次。
+        """对审校严重项生成 shadow 重译并盲审验证，每段最多一次。
 
-        采纳条件 = 重译非空且过长度校验：采纳则标点规范化后更新 seg.target 并标 fixed=True；
-        不采纳保持 fixed=False 留人工。最终审校重译时原滚动上下文已失效，
+        采纳条件 = 重译非空、通过长度门且 fresh reviewer 未发现受支持问题；
+        采纳后才规范化标点并更新 seg.target。失败候选留档，正式译文不变。
+        最终审校重译时原滚动上下文已失效，
         用该段前后各 2 段译文做局部上下文。
         """
         by_seg: dict[int, list[dict]] = {}
@@ -1941,12 +2182,102 @@ class Orchestrator:
             safe_synopsis, safe_digest = self._prompt_plot_context(
                 book_synopsis, chapter_digest
             )
-            new_t = self.review_fixer.retranslate_with_feedback(
-                seg.source, feedback=feedback, glossary_terms=segment_terms, style=style,
-                context_before=before, context_after=after,
-                book_synopsis=safe_synopsis, chapter_digest=safe_digest,
-                narrative_facts=narrative_facts)
-            if new_t and not checks.length_flags([seg.source], [new_t]):
+            fix_input_ref = None
+            if store is not None and chapter_index is not None:
+                fix_input_ref = self._archive_translation_input(
+                    store,
+                    stage="review_fix",
+                    chapter=chapter_index,
+                    start_index=idx,
+                    sources=[seg.source],
+                    current_targets=[seg.target or ""],
+                    terms=segment_terms,
+                    style=style,
+                    context=f"【前文】\n{before}\n【后文】\n{after}",
+                    book_synopsis=safe_synopsis,
+                    chapter_digest=safe_digest,
+                    narrative_facts=narrative_facts,
+                    extra={"feedback": feedback},
+                )
+            generation_error = ""
+            generation_raw_response = ""
+            try:
+                new_t = self.review_fixer.retranslate_with_feedback(
+                    seg.source, feedback=feedback, glossary_terms=segment_terms, style=style,
+                    context_before=before, context_after=after,
+                    book_synopsis=safe_synopsis, chapter_digest=safe_digest,
+                    narrative_facts=narrative_facts)
+            except Exception as error:  # keep formal text and continue reviewing
+                new_t = ""
+                generation_error = f"{type(error).__name__}: {error}"
+                generation_raw_response = getattr(error, "raw_text", "") or ""
+            if not new_t and not generation_error:
+                generation_error = "empty_fix_response"
+            length_ok = bool(
+                new_t and not checks.length_flags([seg.source], [new_t])
+            )
+            validation_issues: list[dict[str, Any]] = []
+            validation_dismissed: list[dict[str, Any]] = []
+            validation_error = ""
+            if length_ok and self.config.pipeline.verify_review_fixes:
+                try:
+                    raw_validation = self.reviewer.review(
+                        [seg.source],
+                        [new_t],
+                        segment_terms,
+                        narrative_facts=narrative_facts,
+                    )
+                    validation = self.review_issue_validator.validate(
+                        raw_validation,
+                        [seg.source],
+                        [new_t],
+                        segment_terms,
+                    )
+                    validation_issues = validation.issues
+                    validation_dismissed = validation.dismissed
+                except Exception as error:  # safe failure: never adopt unverified text
+                    validation_error = f"{type(error).__name__}: {error}"
+
+            shadow_verified = (
+                length_ok
+                and (
+                    not self.config.pipeline.verify_review_fixes
+                    or (not validation_issues and not validation_error)
+                )
+            )
+            reason = (
+                ""
+                if shadow_verified
+                else (
+                    "fix_generation_failed"
+                    if generation_error
+                    else "length_validation_failed"
+                    if not length_ok
+                    else "shadow_review_failed"
+                )
+            )
+            shadow_artifact = None
+            if store is not None and chapter_index is not None:
+                shadow_artifact = store.record_translation_stage(
+                    "review_shadow",
+                    chapter=chapter_index,
+                    start_index=idx,
+                    sources=[seg.source],
+                    previous_targets=[seg.target or ""],
+                    targets=[new_t or ""],
+                    input_ref=fix_input_ref,
+                    metadata={
+                        "status": "verified" if shadow_verified else "rejected",
+                        "reason": reason,
+                        "issues": seg_issues,
+                        "validation_issues": validation_issues,
+                        "validation_dismissed": validation_dismissed,
+                        "validation_error": validation_error,
+                        "generation_error": generation_error,
+                        "generation_raw_response": generation_raw_response,
+                    },
+                )
+            if shadow_verified:
                 if self._punctuation_enabled():
                     new_t = normalize_zh(
                         new_t,
@@ -1960,8 +2291,37 @@ class Orchestrator:
                     )[0]
                 old_t = seg.target
                 seg.target = new_t
+                applied_artifact = None
+                if store is not None and chapter_index is not None:
+                    applied_artifact = store.record_translation_stage(
+                        "review_applied",
+                        chapter=chapter_index,
+                        start_index=idx,
+                        sources=[seg.source],
+                        previous_targets=[old_t or ""],
+                        targets=[new_t],
+                        metadata={
+                            "shadow_record_id": (
+                                shadow_artifact.get("record_id")
+                                if shadow_artifact is not None
+                                else None
+                            ),
+                            "issues": seg_issues,
+                        },
+                    )
                 for it in seg_issues:
                     it["fixed"] = True
+                    it["fix_validation"] = {
+                        "status": "verified",
+                        "method": (
+                            "blind_shadow_review"
+                            if self.config.pipeline.verify_review_fixes
+                            else "disabled"
+                        ),
+                        "dismissed": validation_dismissed,
+                        "artifact_ref": shadow_artifact,
+                        "applied_artifact_ref": applied_artifact,
+                    }
                 if store is not None:
                     store.log_event(
                         "autofix_applied",
@@ -1970,9 +2330,23 @@ class Orchestrator:
                         source=seg.source,
                         before=old_t,
                         after=new_t,
+                        shadow_artifact_ref=shadow_artifact,
+                        applied_artifact_ref=applied_artifact,
                         issues=seg_issues,
                     )
-            elif store is not None:
+            else:
+                for it in seg_issues:
+                    it["fix_validation"] = {
+                        "status": "rejected",
+                        "reason": reason,
+                        "issues": validation_issues,
+                        "dismissed": validation_dismissed,
+                        "error": validation_error,
+                        "generation_error": generation_error,
+                        "generation_raw_response": generation_raw_response,
+                        "artifact_ref": shadow_artifact,
+                    }
+            if not shadow_verified and store is not None:
                 store.log_event(
                     "autofix_rejected",
                     chapter=chapter_index,
@@ -1980,6 +2354,13 @@ class Orchestrator:
                     source=seg.source,
                     before=seg.target,
                     proposed=new_t,
+                    reason=reason,
+                    shadow_artifact_ref=shadow_artifact,
+                    validation_issues=validation_issues,
+                    validation_dismissed=validation_dismissed,
+                    validation_error=validation_error,
+                    generation_error=generation_error,
+                    generation_raw_response=generation_raw_response,
                     issues=seg_issues,
                 )
 
@@ -1994,10 +2375,11 @@ class Orchestrator:
         LLM 审校不在翻译批内做；全书完成后由独立 Review 阶段统一执行。
         """
         sources = [s.source for s in batch]
-        targets = self.translator.translate_batch(
+        initial_targets = self.translator.translate_batch(
             sources, glossary_terms=terms, style=style, context=ctx_text,
             book_synopsis=book_synopsis, chapter_digest=chapter_digest,
             narrative_facts=narrative_facts)
+        targets = list(initial_targets)
 
         policy_fallback_indexes = list(
             self.translator.last_policy_context_fallback_indexes
@@ -2008,6 +2390,7 @@ class Orchestrator:
         polish_recovery_fallback_indexes: list[int] = []
         polish_failure_details: list[dict[str, object]] = []
         refinement_failed_indexes: list[int] = []
+        refinement_targets: list[str] | None = None
         if self.config.pipeline.polish:
             polished = self.polisher.polish(
                 targets,
@@ -2021,6 +2404,7 @@ class Orchestrator:
             )
             if len(polished) == len(targets):
                 targets = polished
+                refinement_targets = list(polished)
             policy_fallback_indexes = sorted(set(
                 policy_fallback_indexes
                 + self.polisher.last_policy_context_fallback_indexes
@@ -2045,6 +2429,8 @@ class Orchestrator:
 
         return _BatchResult(
             targets=targets,
+            initial_targets=list(initial_targets),
+            refinement_targets=refinement_targets,
             bt_samples=bt_samples,
             policy_fallback_indexes=policy_fallback_indexes,
             content_model_fallback_indexes=content_model_fallback_indexes,

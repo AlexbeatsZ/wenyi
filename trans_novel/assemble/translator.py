@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from ..agents import langprofile, prompts
 from ..agents.base import Agent
-from ..glossary.store import GlossaryTerm
 from ..config import Config
+from ..glossary.store import GlossaryTerm
 from ..llm.base import ContentPolicyError, LLMClient
 
 
@@ -231,10 +231,11 @@ class Translator(Agent):
         chapter_digest: str = "",
         narrative_facts: str = "",
     ) -> str:
-        """带审校意见定向重译单段（章末 autofix 用）。失败返回空串，由调用方决定弃用。
+        """带审校意见定向重译单段（章末 autofix 用）。
 
         复用 translator_system（与主翻译共享稳定前缀，命中缓存）；
         user 用 translator_fix_user：前缀块与主翻译一致，上下文换成前文+后文译文，附审校意见。
+        传输或解析异常交给编排器留档并安全拒绝；结构正确但无候选时返回空串。
         """
         system = prompts.render(
             "translator_system", src=self.src, tgt=self.tgt,
@@ -254,8 +255,12 @@ class Translator(Agent):
             feedback=feedback or "（无）",
             source=source,
         )
-        items = self._ask_json(system, user, tier="strong",
-                               key="translations", default=None)
+        items = self._ask_json(
+            system,
+            user,
+            tier="strong",
+            key="translations",
+        )
         if isinstance(items, list) and items:
             return str(items[0]).strip()
         return ""

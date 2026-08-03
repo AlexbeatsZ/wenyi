@@ -276,6 +276,7 @@ HOME（Windows 上同时隔离 USERPROFILE/LOCALAPPDATA），从而避免机器�
 pipeline:
   review: false
   autofix_severe: false
+  verify_review_fixes: true
   auto_resolve_glossary_conflicts: false
   polish: true
   backtranslate_sample: 0
@@ -289,6 +290,7 @@ pipeline:
 
 - `review`：默认关闭；开启后在全书翻译完成时自动执行独立的最终审校阶段。关闭时仍可显式调用 `trans-novel review`。
 - `autofix_severe`：最终审校时自动重译并采纳通过校验的漏译、误译等严重问题。
+- `verify_review_fixes`：严重项候选先保留在 shadow 译文中，由新一轮盲审通过后才写回正式章节；默认开启，失败候选仍会留档。
 - `auto_resolve_glossary_conflicts`：最终审校前，由主模型结合候选译名和局部原译文上下文自动裁定术语冲突。
 - `polish`：翻译后让强模型对照原文、初译和分层上下文进行精修，质量可能提升，但显著增加耗时和成本。
 - `backtranslate_sample`：回译抽检比例，`0` 为关闭。

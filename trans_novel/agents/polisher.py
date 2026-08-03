@@ -102,13 +102,17 @@ class Polisher(Agent):
         count: int,
         stage: str,
     ) -> None:
-        self.last_failure_details.append({
+        detail: dict[str, object] = {
             "start_index": offset,
             "count": count,
             "stage": stage,
             "error_type": type(error).__name__,
             "error": str(error)[:500],
-        })
+        }
+        raw_response = getattr(error, "raw_text", "")
+        if isinstance(raw_response, str) and raw_response:
+            detail["raw_response"] = raw_response
+        self.last_failure_details.append(detail)
 
     def _fallback_leaf(
         self,

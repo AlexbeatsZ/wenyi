@@ -10,16 +10,21 @@
   glossary.db       术语库 + 翻译记忆库
   report.json       QA 报告
   events.jsonl      追加式行为 / 改写 / 翻译结果日志
+  artifacts/inputs/ 内容寻址的术语、上下文与叙事事实输入快照
+  artifacts/translations/ch{n}.jsonl  初译、精修、标点与终审版本链
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Iterator
+from typing import Any
 
 from ..ingest.models import Chapter, Document
 
@@ -148,6 +153,19 @@ class RunStore:
         """返回追加式 JSONL 事件日志路径。"""
         return os.path.join(self.run_dir, "events.jsonl")
 
+    @property
+    def artifacts_dir(self) -> str:
+        """返回追加式阶段产物与内容寻址输入快照目录。"""
+        return os.path.join(self.run_dir, "artifacts")
+
+    def translation_artifact_path(self, chapter: int) -> str:
+        """返回一章所有初译、精修和审校版本的追加式 JSONL 路径。"""
+        return os.path.join(
+            self.artifacts_dir,
+            "translations",
+            f"ch{chapter}.jsonl",
+        )
+
     def chapter_path(self, ci: int) -> str:
         """返回指定章节索引对应的状态文件路径。"""
         return os.path.join(self.chapters_dir, f"ch{ci}.json")
@@ -272,6 +290,72 @@ class RunStore:
     def load_usage(self) -> dict | None:
         """读取累计 token 用量；文件尚不存在时返回 None。"""
         return self._read_json(self.usage_path) if os.path.isfile(self.usage_path) else None
+
+    # ── 可追溯阶段产物 ──────────────────────────────────────────────────
+    def save_translation_input(self, data: dict[str, Any]) -> dict[str, str]:
+        """内容寻址保存一次翻译请求的结构化输入，返回稳定引用。
+
+        相同上下文只存一份，阶段日志引用其 SHA-256；这既保留了术语、叙事
+        事实和滚动上下文，又避免在每条事件里重复整段提示输入。
+        """
+        encoded = json.dumps(
+            data,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        relative = os.path.join("artifacts", "inputs", f"{digest}.json")
+        path = os.path.join(self.run_dir, relative)
+        if not os.path.isfile(path):
+            self._write_json(path, data)
+        return {"path": relative.replace("\\", "/"), "sha256": digest}
+
+    def record_translation_stage(
+        self,
+        stage: str,
+        *,
+        chapter: int,
+        start_index: int,
+        sources: list[str],
+        targets: list[str],
+        previous_targets: list[str] | None = None,
+        input_ref: dict[str, str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """追加保存一个阶段的逐段版本，不改写任何既有产物。"""
+        if len(sources) != len(targets):
+            raise ValueError("阶段产物 source/target 数量不一致")
+        if previous_targets is not None and len(previous_targets) != len(targets):
+            raise ValueError("阶段产物 previous_targets 数量不一致")
+        record_id = f"stage-{uuid.uuid4().hex}"
+        segments = []
+        for offset, (source, target) in enumerate(zip(sources, targets)):
+            item: dict[str, Any] = {
+                "index": start_index + offset,
+                "source": source,
+                "target": target,
+            }
+            if previous_targets is not None:
+                item["previous_target"] = previous_targets[offset]
+            segments.append(item)
+        row = {
+            "ts": datetime.now().astimezone().isoformat(timespec="microseconds"),
+            "record_id": record_id,
+            "stage": stage,
+            "chapter": chapter,
+            "start_index": start_index,
+            "count": len(segments),
+            "input_ref": input_ref,
+            "metadata": metadata or {},
+            "segments": segments,
+        }
+        path = self.translation_artifact_path(chapter)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        relative = os.path.relpath(path, self.run_dir).replace("\\", "/")
+        return {"path": relative, "record_id": record_id}
 
     # ── 批次恢复检查点 ────────────────────────────────────────────────────
     @staticmethod

@@ -20,8 +20,9 @@ class TestParseJsonLoose(unittest.TestCase):
         self.assertEqual(parse_json_loose(text), ["译文1", "译文2"])
 
     def test_failure(self):
-        with self.assertRaises(JSONParseError):
+        with self.assertRaises(JSONParseError) as raised:
             parse_json_loose("没有任何 JSON 内容")
+        self.assertEqual(raised.exception.raw_text, "没有任何 JSON 内容")
 
 
 class TestResolveTier(unittest.TestCase):

@@ -38,6 +38,13 @@ uv run trans-novel review book.epub
 uv run trans-novel review book.epub --force --fix
 ```
 
+最终审校只允许精确的 `source → target` 词条支持术语判错；aliases 仅用于检索，
+不能把简称强制改成全名。严重项候选先在 shadow 译文中盲审，通过后才会写回正式
+章节。`state/<书名>/artifacts/translations/` 追加保留初译、精修、标点规范化、
+终审候选、拒绝结果和正式采纳版本；`artifacts/inputs/` 以 SHA-256 去重保存每批
+使用的术语、上下文、梗概、风格与当前位置可见叙事事实，`events.jsonl` 记录模型、
+回退、失败、验证和采纳信息并引用对应产物。
+
 ## 支持范围
 
 - 输入：EPUB、FB2、TXT、Markdown、HTML、PDF。

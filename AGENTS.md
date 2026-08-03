@@ -17,6 +17,7 @@ This repository uses a single-context documentation layout. See `docs/agents/dom
 - Maintain the user's fork at `origin` (`AlexbeatsZ/wenyi`); use `upstream` for synchronization and do not open an upstream PR unless requested.
 - API keys stay in environment variables. On Windows, run Python through `uv` and keep runtime logs/backups under `%LOCALAPPDATA%\Temp\.agents\`.
 - The high-quality pipeline is Gemini 3.6 Flash Medium initial translation, Gemini Pro High polishing, and Codex Sol High independent review/fixing. Explicit Gemini content-policy rejections use Codex Luna XHigh for chapter summaries or the smallest rejected initial-translation leaf; failed precision-polish leaves use Codex Terra High for both policy rejection and structured-response recovery. Narrative facts must be projected by chapter/segment visibility so later revelations do not leak into earlier translation.
+- Glossary aliases are retrieval-only and cannot inherit a canonical target; final-review terminology findings require an exact source mapping. Severe review fixes stay in shadow text until a blind re-review passes. Preserve the append-only stage archive under `state/<book>/artifacts/` when diagnosing or resuming a run.
 - Final EPUB acceptance includes `7z t` plus OPF manifest/spine resolution; a readable ZIP alone is insufficient.
 - Tieba publishing is preview-only unless `--publish` is explicit. Preserve the project Chrome profile, single-instance lock, rate limits, atomic checkpoint, and server-persisted-floor verification; never bypass CAPTCHA.
 

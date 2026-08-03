@@ -25,6 +25,22 @@ def _cfg():
 
 
 class TestAnalyzer(unittest.TestCase):
+    def test_character_alias_schema_requires_an_independent_target(self):
+        client = FakeClient(handler=lambda m, t, j: json.dumps({
+            "genre": "",
+            "tone": "",
+            "style_guide": "",
+            "characters": [],
+            "terms": [],
+        }, ensure_ascii=False))
+        analyzer = Analyzer(client, _cfg())
+
+        analyzer.analyze("样章")
+
+        prompt = client.calls[-1]["messages"][0]["content"]
+        self.assertIn("该原文写法在中文中实际采用的独立译法", prompt)
+        self.assertIn("不得默认继承人物全名 target", client.calls[-1]["messages"][-1]["content"])
+
     def test_japanese_pronoun_guidance_balances_naturalness_and_uncertainty(self):
         guidance = langprofile.translate_guidance("ja")
 

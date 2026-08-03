@@ -101,6 +101,29 @@ class TestNarrativeKnowledge(unittest.TestCase):
 
         self.assertEqual(view.facts, [])
 
+    def test_time_scoped_short_name_keeps_its_own_target(self):
+        self.knowledge.seed_character(
+            {
+                "entity_id": "person:noel",
+                "source": "吉川ノエル",
+                "target": "吉川诺艾尔",
+                "aliases": [{
+                    "source": "ノエル",
+                    "target": "诺艾尔",
+                    "visible_from_chapter": 0,
+                    "visible_from_segment": 0,
+                    "status": "confirmed",
+                    "evidence": "角色以全名自我介绍，后续对白直接称ノエル",
+                }],
+            }
+        )
+
+        view = self.knowledge.view("ノエルは呟いた。", NarrativePosition(0, 0))
+        short_name = next(term for term in view.terms if term.source == "ノエル")
+
+        self.assertEqual(short_name.target, "诺艾尔")
+        self.assertNotEqual(short_name.target, "吉川诺艾尔")
+
 
 if __name__ == "__main__":
     unittest.main()

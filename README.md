@@ -39,10 +39,20 @@ uv run trans-novel review book.epub
 uv run trans-novel review book.epub --force --fix
 ```
 
-Set `pipeline.auto_resolve_glossary_conflicts: true` to let the main review
-model arbitrate unresolved glossary candidates from local source/translation
-context before reviewing the body text. Severe review fixes also use the main
-model; `translation_llm` remains the first-draft client.
+Set `pipeline.auto_resolve_glossary_conflicts: true` to let the main model
+arbitrate unresolved glossary candidates from local source/translation
+context before reviewing the body text. Severe review fixes use the same
+`review_llm` as detection; a proposed fix is blindly re-reviewed in shadow text before it
+may replace the formal translation. Glossary aliases are retrieval hints only;
+only an exact source-to-target entry can support a terminology finding.
+
+Wenyi keeps an append-only version chain under
+`state/<book>/artifacts/translations/`: first drafts, refinements, punctuation
+normalization, review proposals, rejected proposals, and applied fixes remain
+comparable. Content-addressed snapshots under `artifacts/inputs/` preserve the
+glossary, rolling context, synopsis, style, and time-visible narrative facts
+used by each batch. `events.jsonl` links to these records and keeps provider,
+model, fallback, failure, validation, and adoption details.
 
 Malformed structured responses are retried once with a stricter JSON reminder.
 If review or glossary arbitration still cannot parse the response, Wenyi

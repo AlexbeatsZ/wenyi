@@ -176,6 +176,16 @@ def _match_text(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
 
+def source_matches_text(source: str, text: str) -> bool:
+    """Return whether an exact glossary source plausibly occurs in text.
+
+    This intentionally accepts one source spelling only.  Callers that want
+    alias-based retrieval must enumerate aliases themselves; terminology
+    enforcement uses this interface so aliases cannot inherit a target.
+    """
+    return _term_occurs(_match_text(text), _match_text(source))
+
+
 class GlossaryStore:
     def __init__(self, db_path: str):
         """打开术语数据库并初始化当前版本的表结构。"""

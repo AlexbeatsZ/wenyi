@@ -7,12 +7,13 @@ import re
 import threading
 import unittest
 
+from trans_novel.agents.polisher import Polisher
+from trans_novel.agents.reviewer import BackTranslator, Reviewer
 from trans_novel.config import Config
+from trans_novel.glossary.store import GlossaryTerm
 from trans_novel.ingest.models import Segment
 from trans_novel.llm.base import ContentPolicyError
 from trans_novel.llm.providers.fake import FakeClient
-from trans_novel.agents.reviewer import Reviewer, BackTranslator
-from trans_novel.agents.polisher import Polisher
 from trans_novel.pipeline.orchestrator import Orchestrator
 
 
@@ -25,6 +26,25 @@ def _cfg():
 
 
 class TestReviewer(unittest.TestCase):
+    def test_prompt_names_objective_chinese_fluency_and_alias_limits(self):
+        client = FakeClient(handler=lambda m, t, j: '{"issues":[]}')
+        reviewer = Reviewer(client, _cfg())
+
+        reviewer.review(
+            ["「光った」"],
+            ["「闪光了」"],
+            glossary_terms=[
+                GlossaryTerm("吉川ノエル", "吉川诺艾尔", aliases=["ノエル"])
+            ],
+        )
+
+        system = client.calls[-1]["messages"][0]["content"]
+        user = client.calls[-1]["messages"][-1]["content"]
+        self.assertIn("fluency", system)
+        self.assertIn("明显不成立或有翻译腔", system)
+        self.assertIn("不能据此要求简称改成全名", system)
+        self.assertIn("检索写法", user)
+
     def test_review_reports_issues(self):
         issues = {"issues": [
             {"index": 0, "type": "missing", "detail": "漏了后半句"},
@@ -58,10 +78,10 @@ class TestReviewer(unittest.TestCase):
             Segment(index=1, source="源文乙", target="译文乙"),
         ]
 
-        issues = orch._review_chapter(segments, [])
+        outcome = orch._review_chapter(segments, [])
 
-        self.assertEqual([it["index"] for it in issues], [0, 1])
-        self.assertEqual([it["detail"] for it in issues], ["甲", "乙"])
+        self.assertEqual([it["index"] for it in outcome.issues], [0, 1])
+        self.assertEqual([it["detail"] for it in outcome.issues], ["甲", "乙"])
 
     def test_invalid_json_retries_then_recursively_splits_review_chunk(self):
         """整块连续返回坏 JSON 时二分；子块成功后索引仍映射到原章。"""
@@ -86,9 +106,9 @@ class TestReviewer(unittest.TestCase):
             Segment(index=1, source="源文乙", target="译文乙"),
         ]
 
-        issues = orch._review_chapter(segments, [])
+        outcome = orch._review_chapter(segments, [])
 
-        self.assertEqual([it["index"] for it in issues], [0, 1])
+        self.assertEqual([it["index"] for it in outcome.issues], [0, 1])
         review_calls = [
             call for call in client.calls
             if "译文审校" in call["messages"][0]["content"]

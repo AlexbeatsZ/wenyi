@@ -10,6 +10,10 @@ from typing import Any
 class JSONParseError(ValueError):
     """模型回复无法恢复为完整 JSON；调用层可据此安全重试或拆批。"""
 
+    def __init__(self, message: str, *, raw_text: str = "") -> None:
+        super().__init__(message)
+        self.raw_text = raw_text
+
 
 def _repair_unescaped_quotes(text: str) -> str:
     """转义 JSON 字符串值内部未转义的 ASCII 双引号。
@@ -110,5 +114,6 @@ def parse_json_loose(text: str) -> Any:
     tail = text[-160:] if len(text) > 160 else text
     raise JSONParseError(
         f"无法解析为 JSON（回复 {len(text)} 字符）："
-        f"开头 {text[:160]!r}；结尾 {tail!r}"
+        f"开头 {text[:160]!r}；结尾 {tail!r}",
+        raw_text=text,
     )

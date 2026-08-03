@@ -132,12 +132,17 @@ REVIEWER_SYSTEM = Template("""\
 - terminology：原文确实出现、且对照表已给固定译法的词，译文未遵守
   （对照表为全书参考，含本批未出现的词条；只就本批原文实际出现的词判断，勿因表中无关词条误报）
 - pronoun：人称/性别代词错误
+- fluency：译文虽然能猜出原意，但中文表达明显不成立或有翻译腔，例如搭配错误、谓语缺少自然主语、
+  机械照搬源语表达；仅凭个人文风偏好可以改得更漂亮的不算 fluency
+terminology 必须填写 term_source，且只能引用对照表左侧存在的**完整原词映射**。对照表中的“检索写法”
+只用于召回相关实体，不代表这些写法继承左侧原词的整词译法，不能据此要求简称改成全名；简称、昵称或称谓
+只有作为独立 source → target 词条出现时才可判 terminology。
 性别/人称只有在当前原文明示，或【当前位置允许使用的人物事实】提供已经确认的性别事实时才能判错；姓名印象、外貌、服装、语气、
 第一人称和全书后文只能算弱证据。原文有伪装、误认、悬念或未揭示身份时，译文保持姓名/称谓/省略主语是正确做法，
 不得依据后文真相要求早期译文提前改用会泄露身份的代词。
-只报实质性错误：合理的语序调整、自然意译、风格润色**不算问题**，不要报。
+只报实质性错误：合理的语序调整、自然意译、单纯风格润色**不算问题**，不要报。
 拿不准是否为错就不报，宁缺毋滥。每条须给出可直接采纳的 suggestion。仅输出 JSON：
-{"issues":[{"index":整数段号,"type":"...","detail":"简述","suggestion":"修改后的译文或具体改法"}]}
+{"issues":[{"index":整数段号,"type":"...","term_source":"terminology 时为对照表左侧完整原词，否则空字符串","detail":"简述","suggestion":"修改后的译文或具体改法"}]}
 没有问题则输出 {"issues":[]}。\
 """)
 
@@ -241,7 +246,7 @@ ANALYZER_SYSTEM = Template("""\
   "register": "语域（书面/口语/文白程度）",
   "dialogue_style": "对话风格（口癖、语气词、称呼习惯）",
   "rhetoric": "修辞倾向（比喻密度、心理描写方式等）",
-  "characters": [{"entity_id":"稳定实体ID(可空)","source":"原文主要写法","aliases":[{"source":"别名/称谓","visible_from_chapter":0,"visible_from_segment":0,"visible_until_chapter":null,"visible_until_segment":null,"status":"confirmed/suspected","evidence":"确认同一实体的原文证据"}],"reading":"读音(可空)","target":"建议中文译名","gender":"男/女/未知","gender_confidence":"confirmed/suspected/unknown","gender_evidence":"原文中的直接证据；没有则留空","gender_evidence_chapter":"证据所在0基章节号；无法定位则为null","gender_evidence_segment":"证据所在0基段号；无法定位则为null","voice":"不含剧情事实的说话方式：自称、口癖、敬语习惯","note":"人物关系或歧义，仅供分析存档，不直接注入早期翻译"}],
+  "characters": [{"entity_id":"稳定实体ID(可空)","source":"原文主要写法","aliases":[{"source":"别名/简称/称谓","target":"该原文写法在中文中实际采用的独立译法","visible_from_chapter":0,"visible_from_segment":0,"visible_until_chapter":null,"visible_until_segment":null,"status":"confirmed/suspected","evidence":"确认同一实体及该译法的原文证据"}],"reading":"读音(可空)","target":"建议中文译名","gender":"男/女/未知","gender_confidence":"confirmed/suspected/unknown","gender_evidence":"原文中的直接证据；没有则留空","gender_evidence_chapter":"证据所在0基章节号；无法定位则为null","gender_evidence_segment":"证据所在0基段号；无法定位则为null","voice":"不含剧情事实的说话方式：自称、口癖、敬语习惯","note":"人物关系或歧义，仅供分析存档，不直接注入早期翻译"}],
   "terms": [{"source":"原文词","reading":"读音(可空)","target":"建议中文译法","type":"地名/组织/术语","note":""}]
 }\
 """)
@@ -255,6 +260,7 @@ $sample
 人名印象、外貌、服装、语气以及 私/僕/俺/あたし 等第一人称只能标 suspected，不能作为确定事实。
 confirmed 必须同时给出可核对的 gender_evidence 以及证据所在的0基章节、段号；不能定位时必须降为 unknown/suspected。
 别名与身份关联也必须记录从哪一章哪一段起才对叙事可见；后文才揭示的关联不得从第0章生效。
+每个 alias 必须单独填写其自然中文 target；简称、昵称和称谓不得默认继承人物全名 target，例如原文简称只应译简称时不能扩写为中文全名。
 若人物可能伪装、被误认或后文反转，保持 unknown/suspected，并在 note 中记录歧义，不得用后文答案覆盖早期叙事视角。
 样章可能取自全书开头/中部/结尾（见标注），请综合判断整体风格及其演变。\
 """)
@@ -273,7 +279,7 @@ GLOSSARY_EXTRACTOR_SYSTEM = Template("""\
 - 对照表可能包含本批未出现条目，不要重复输出未在本批原文或译文中得到确认的项。
 术语字段说明：$term_guidance
 仅输出 JSON：
-{"terms":[{"source":"原文专有名词或独立译法称谓","reading":"读音(可空)","target":"本批译文中实际采用的中文译法","type":"人物/地名/组织/术语/招式/称谓","gender":"男/女/未知(仅人物)","aliases":["同一实体的其它原文写法/昵称/简称"],"note":"归属、身份或统一理由"}]}\
+{"terms":[{"source":"原文专有名词或独立译法称谓","reading":"读音(可空)","target":"本批译文中实际采用的中文译法","type":"人物/地名/组织/术语/招式/称谓","gender":"男/女/未知(仅人物)","aliases":["仅空格/全半角/直接敬称后缀等透明检索写法"],"note":"归属、身份或统一理由"}]}\
 """)
 
 GLOSSARY_EXTRACTOR_USER = Template("""\
@@ -398,7 +404,7 @@ def render_glossary(terms: list[GlossaryTerm]) -> str:
         if t.reading:
             extra.append(f"读音:{t.reading}")
         tag = f"（{t.type}{('，' + '，'.join(extra)) if extra else ''}）"
-        alias = f" [别名: {', '.join(t.aliases)}]" if t.aliases else ""
+        alias = f" [检索写法（不规定整词译法）: {', '.join(t.aliases)}]" if t.aliases else ""
         lines.append(f"- {t.source} → {t.target}{tag}{alias}")
     return "\n".join(lines)
 
