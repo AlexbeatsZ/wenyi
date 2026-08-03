@@ -21,3 +21,4 @@ explore/
 *.azw3
 *.pdf
 *.html
+!observer/index.html
